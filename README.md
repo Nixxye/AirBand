@@ -1,4 +1,4 @@
-# GuitarHealer
+# AirBand
 Os jogos musicais, embora populares, ainda dependem de periféricos específicos como guitarras e baterias, que ocupam espaço e apresentam custo elevado. Diante desse cenário, o projeto Air Band tem como objetivo desenvolver uma alternativa compacta e multifuncional: uma luva sensorizada capaz de substituir diferentes controladores tradicionais em um único dispositivo.
 
 A luva contará com sensores de flexão e movimento, além de integração com uma webcam para captura dos gestos do usuário em tempo real. Esses dados serão processados e convertidos em comandos do jogo, possibilitando a simulação de diferentes modos (como guitarra, bateria e outros) de acordo com a configuração selecionada no software de apoio. O sistema busca oferecer praticidade, versatilidade e menor custo, sem comprometer a experiência de imersão característica dos jogos musicais.
