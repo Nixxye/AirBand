@@ -3,6 +3,8 @@ Os jogos musicais, embora populares, ainda dependem de periféricos específicos
 
 A luva contará com sensores de flexão e movimento, além de integração com uma webcam para captura dos gestos do usuário em tempo real. Esses dados serão processados e convertidos em comandos do jogo, possibilitando a simulação de diferentes modos (como guitarra, bateria e outros) de acordo com a configuração selecionada no software de apoio. O sistema busca oferecer praticidade, versatilidade e menor custo, sem comprometer a experiência de imersão característica dos jogos musicais.
 
+
+[Cronograma](https://docs.google.com/spreadsheets/d/1t47Ufq2zki0159EHYryou9m896qojC0YicFVhhZcW6Q/edit?usp=sharing)
 # Desenvolvimento do Projeto - Protótipo da Luva Interativa
 
 ## 09/09 - Construção do Protótipo
