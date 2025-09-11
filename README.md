@@ -5,6 +5,7 @@ A luva contará com sensores de flexão e movimento, além de integração com u
 
 
 [Cronograma](https://docs.google.com/spreadsheets/d/1t47Ufq2zki0159EHYryou9m896qojC0YicFVhhZcW6Q/edit?usp=sharing)
+[Plano de projeto](imgs/PP_AirBand.pdf)
 # Desenvolvimento do Projeto - Protótipo da Luva Interativa
 
 ## 09/09 - Construção do Protótipo
