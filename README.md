@@ -31,3 +31,32 @@ A estrutura do protótipo será inspirada em um design 3D de exemplo no **Tinker
 No dia **13/09**, os alunos participarão do **Workshop: Modelagem CNC para Corte a Laser**, com o objetivo de aprender as técnicas necessárias para preparar os protótipos para o corte.
 
 ---
+## Densenvolvimento até 08/10
+
+### Sensores
+Testamos o funcionamento do ESP 32, do acelerômetro, do giroscópio e do potênciometro. 
+
+### Mecânica da Luva
+Após participar do Workshop, desenvolvemos e cortamos os dois modelos de MDF.
+Vídeo de comparativo dos dois modelos em MDF feitos:
+
+link: https://www.youtube.com/watch?v=WJLIjmnFiwk&feature=youtu.be
+
+### Câmera
+Testamos o reconhecimento das mãos em diferentes ambientes.
+
+### Interface gráfica 
+Inicializamos o desenvolvimento da interface gráfica. Foi feita em python.  
+
+
+### Imagens adicionais
+[Imagem da luva](imgs/PP_AirBand.pdf)
+
+### Próximos Passos
+Agora vamos realizar a diferenciação da mão nos quadrantes usando a câmera, integrar os sensores com a interface gráfica e continuar trabalhando na mecânica da luva.
+
+
+
+
+
+
