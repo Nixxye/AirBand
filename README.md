@@ -50,7 +50,7 @@ Inicializamos o desenvolvimento da interface gráfica. Foi feita em python.
 
 
 ### Imagens adicionais
-[Imagem da luva](imgs/PP_AirBand.pdf)
+![Imagem da luva atual](imgs/luva.jpeg)
 
 ### Próximos Passos
 Agora vamos realizar a diferenciação da mão nos quadrantes usando a câmera, integrar os sensores com a interface gráfica e continuar trabalhando na mecânica da luva.
