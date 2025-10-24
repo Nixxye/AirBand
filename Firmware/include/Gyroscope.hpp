@@ -11,7 +11,7 @@
 const float ACCEL_SCALE = 16384.0;
 const float GYRO_SCALE  = 131.0;
 
-extern volatile bool mpuInterrupt;
+// extern volatile bool mpuInterrupt;
 
 class Gyroscope {
 private:

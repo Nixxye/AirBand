@@ -1,10 +1,15 @@
-#ifndef ISR_H
-#define ISR_H
+#ifndef ISR_HPP
+#define ISR_HPP
 
-#include "Gyroscope.hpp"
+#include <Arduino.h>
 #include "GPIOS.hpp"
 
-void Init_ISR();
-void IRAM_ATTR onMpuInterrupt();
+extern volatile bool mpuInterrupt;
+extern volatile bool magInterrupt;
 
-#endif // ISR_H
+void Init_ISR();
+
+void IRAM_ATTR onMpuInterrupt();
+void IRAM_ATTR onMagInterrupt();
+
+#endif // ISR_HPP

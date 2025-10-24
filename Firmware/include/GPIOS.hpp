@@ -36,5 +36,5 @@ static const uint8_t PIN_INT = 34;
 static const uint8_t PIN_IRQ = 35;
 
 static const uint8_t INT_GYRO_PIN = 5; // GPIO de interrupção do giroscópio
-
+static const uint8_t INT_MAG_PIN = 15;  // GPIO de interrupção para o Magnetômetro
 #endif // GPIOS_H
