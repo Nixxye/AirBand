@@ -2,7 +2,8 @@
 #include "driver/timer.h"
 #include "Arduino.h"
 
-volatile bool mpuInterrupt = false;
+// << REMOVIDO >> A variável de interrupção não é mais necessária.
+// volatile bool mpuInterrupt = false;
 
 Gyroscope* Gyroscope::instance = nullptr;
 Gyroscope::Gyroscope() : initSuccess(0), AcX(0), AcY(0), AcZ(0), Tmp(0), GyX(0), GyY(0), GyZ(0)
@@ -23,23 +24,18 @@ void Gyroscope::getData(int16_t* ax, int16_t* ay, int16_t* az, int16_t* temp, in
 }
 
 // ================== FUNÇÃO MODIFICADA ==================
-void Gyroscope::loop(){    
-    if (mpuInterrupt) {
-        mpuInterrupt = false;
-        readData();
+void Gyroscope::loop(){     
+    // << MODIFICADO >> A verificação da interrupção foi removida.
+    // A leitura e impressão ocorrem a cada chamada desta função.
+    readData();
 
-        // --- Início da Modificação ---
-        // Imprime os valores no console. Dividimos por 100.0 para reverter a 
-        // multiplicação feita em readData() e exibir os valores físicos.
-        Serial.print("AcX: "); Serial.print(AcX / 100.0);
-        Serial.print(" | AcY: "); Serial.print(AcY / 100.0);
-        Serial.print(" | AcZ: "); Serial.print(AcZ / 100.0);
-        Serial.print(" | Tmp: "); Serial.print(Tmp / 100.0);
-        Serial.print(" | GyX: "); Serial.print(GyX / 100.0);
-        Serial.print(" | GyY: "); Serial.print(GyY / 100.0);
-        Serial.print(" | GyZ: "); Serial.println(GyZ / 100.0);
-        // --- Fim da Modificação ---
-    }
+    Serial.print("AcX: "); Serial.print(AcX / 100.0);
+    Serial.print(" | AcY: "); Serial.print(AcY / 100.0);
+    Serial.print(" | AcZ: "); Serial.print(AcZ / 100.0);
+    Serial.print(" | Tmp: "); Serial.print(Tmp / 100.0);
+    Serial.print(" | GyX: "); Serial.print(GyX / 100.0);
+    Serial.print(" | GyY: "); Serial.print(GyY / 100.0);
+    Serial.print(" | GyZ: "); Serial.println(GyZ / 100.0);
 }
 // ========================================================
 
@@ -86,6 +82,8 @@ void Gyroscope::configMPU6050(){
         Serial.println("|Gyroscope| - MPU6050 acordado!");
     }
 
+    // << REMOVIDO >> A configuração de interrupção foi retirada.
+    /*
     // Habilita interrupção de "data ready" no MPU6050
     Serial.println("|Gyroscope| - Configurando interrupção do MPU6050...");
     Wire.beginTransmission(MPU_ADDR);
@@ -100,6 +98,7 @@ void Gyroscope::configMPU6050(){
     } else {
         Serial.println("|Gyroscope| - Interrupção do MPU6050 configurada!");
     }
+    */
 
     // Configura taxa de trasmisao de dados para 80Hz
     Serial.println("|Gyroscope| - Configurando taxa de transmissão do MPU6050 para 80Hz...");
