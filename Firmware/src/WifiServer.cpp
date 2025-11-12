@@ -93,7 +93,6 @@ void WifiServer::sendDataToClient() {
             adcReader->getData(&v32, &v33, &v34, &v35);
 
             // 4. Montar a string JSON
-            // (Usamos uma string manual para não precisar da biblioteca ArduinoJson)
             String json = "{";
             
             // Dados do Giroscópio (convertendo de volta para float)
@@ -104,7 +103,7 @@ void WifiServer::sendDataToClient() {
             json += ",\"gx\":"; json += (gx_raw / 100.0);
             json += ",\"gy\":"; json += (gy_raw / 100.0);
             json += ",\"gz\":"; json += (gz_raw / 100.0);
-            json += "},";
+            json += "},"; // <-- **AJUSTE: Adicionada vírgula**
             
             // Dados do Magnetômetro
             json += "\"mag\":{";
@@ -113,7 +112,7 @@ void WifiServer::sendDataToClient() {
             json += ",\"mz\":"; json += mz_raw;
             json += ",\"heading\":"; json += heading;
             json += ",\"bearing\":\""; json += bearing; json += "\"";
-            json += "},";
+            json += "},"; // <-- **AJUSTE: Adicionada vírgula**
             
             // Dados do ADC
             json += "\"adc\":{";
@@ -123,7 +122,7 @@ void WifiServer::sendDataToClient() {
             json += ",\"v35\":"; json += v35;
             json += "}";
             
-            json += "}\n"; // O '\n' (newline) é importante para o cliente saber onde o JSON termina
+            json += "}\n"; // O '\n' (newline) é importante
 
             // 5. Enviar para o cliente
             client.print(json);

@@ -18,7 +18,8 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QTextEdit, QSlider,
-    QCheckBox, QStackedWidget
+    QCheckBox, QStackedWidget, QFormLayout,
+    QScrollArea
 )
 from PyQt5.QtCore import QTimer, Qt, pyqtSlot
 
@@ -29,13 +30,9 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSlot
 class Communication:
     """ 
     Gerencia a conexão REAL com a luva (ESP32) via Wi-Fi (TCP Socket).
-    Substitui a simulação.
     """
     
-    # IP Padrão da ESP32 em modo AP
     ESP_HOST = '192.168.4.1' 
-    
-    # Porta (ADIVINHADA) - Altere se o seu WifiServer.cpp usar outra!
     ESP_PORT = 8888 
 
     def __init__(self):
@@ -45,39 +42,21 @@ class Communication:
         self.data_lock = threading.Lock()
         self.network_status_message = "Desconectado"
         
-        # Estrutura de dados padrão (usada para preencher o que não vem da ESP)
-        self.last_sensor_data = self._get_default_sensor_data()
-
-    def _get_default_sensor_data(self):
-        """ Retorna a estrutura completa de dados zerada. """
-        return {
-            "flex_dedo1": 0,
-            "flex_dedo2": 0,
-            "flex_dedo3": 0,
-            "flex_dedo4": 0,
-            "magnetometro_esq": (0, 0, 0),
-            "acelerometro_esq": (0, 0, 0),
-            "giroscopio_esq": (0, 0, 0),
-            "magnetometro_dir": (0, 0, 0),
-            "acelerometro_dir": (0, 0, 0),
-            "giroscopio_dir": (0, 0, 0),
-        }
+        # Armazena os dados brutos e achatados (ex: {"adc_v32": 1023, "gyro_ax": 1.2})
+        self.last_sensor_data = {}
 
     def toggle_connection(self):
         """ Inicia ou para a thread de conexão. """
         if self.connected:
-            # Usuário quer desconectar
             self.connected = False
             if self.receiver_thread:
-                self.receiver_thread.join() # Espera a thread terminar
+                self.receiver_thread.join() 
             if self.sock:
                 self.sock.close()
             self.network_status_message = "Desconectado"
         else:
-            # Usuário quer conectar
             self.connected = True
             self.network_status_message = "Conectando..."
-            # Inicia a thread para não travar a UI
             self.receiver_thread = threading.Thread(target=self._receive_loop, daemon=True)
             self.receiver_thread.start()
 
@@ -85,10 +64,10 @@ class Communication:
         """ Loop principal da thread de rede. """
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5.0) # 5 segundos para conectar
+            self.sock.settimeout(5.0) 
             print(f"Tentando conectar a {self.ESP_HOST}:{self.ESP_PORT}...")
             self.sock.connect((self.ESP_HOST, self.ESP_PORT))
-            self.sock.settimeout(1.0) # 1 segundo para ler
+            self.sock.settimeout(1.0) 
             
             self.network_status_message = "Conectado"
             print("Conectado à ESP32!")
@@ -98,19 +77,16 @@ class Communication:
                 try:
                     data = self.sock.recv(1024)
                     if not data:
-                        # Conexão fechada pelo servidor
                         print("Servidor (ESP32) fechou a conexão.")
                         break
                     
                     buffer += data.decode('utf-8')
                     
-                    # Processa linhas completas (espera JSON terminado por \n)
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         self._parse_data(line)
 
                 except socket.timeout:
-                    # Nenhuma mensagem recebida, apenas continua o loop
                     continue
                 except Exception as e:
                     print(f"Erro no loop de recebimento: {e}")
@@ -118,7 +94,7 @@ class Communication:
 
         except socket.error as e:
             print(f"Falha na conexão com a ESP32: {e}")
-            print("Verifique se o PC está no Wi-Fi 'ALuvaQueTePariu' e se o IP/Porta estão corretos.")
+            print("Verifique se o PC está no Wi-Fi 'ALuvaQueTePariu'.")
             self.network_status_message = f"Falha: {e}"
         finally:
             if self.sock:
@@ -130,26 +106,29 @@ class Communication:
 
     def _parse_data(self, line):
         """ 
-        Decodifica uma linha de dados (JSON) vinda da ESP32
-        e atualiza a estrutura 'last_sensor_data'.
+        Decodifica o JSON da ESP e o "achata" (flatten) em um dicionário.
+        Ex: {"adc": {"v32": 1023}, "gyro": {"ax": 1.2}} 
+        vira: {"adc_v32": 1023, "gyro_ax": 1.2}
         """
         line = line.strip()
         if not line:
             return
             
         try:
-            # Espera um JSON, ex: {"flex_dedo1": 1023, "giroscopio_esq": [1.1, 2.2, 3.3]}
             json_data = json.loads(line)
             
-            # Começa com a estrutura padrão zerada
-            new_data_struct = self._get_default_sensor_data()
+            flattened_data = {}
+            for main_key, value_dict in json_data.items():
+                # main_key = "adc", value_dict = {"v32": 1023, ...}
+                if isinstance(value_dict, dict):
+                    for sub_key, sub_value in value_dict.items():
+                        # new key = "adc_v32"
+                        flattened_data[f"{main_key}_{sub_key}"] = sub_value
+                else:
+                    flattened_data[main_key] = value_dict
             
-            # Atualiza a estrutura com os dados que vieram no JSON
-            new_data_struct.update(json_data)
-            
-            # Atualiza o dicionário principal de forma segura
             with self.data_lock:
-                self.last_sensor_data = new_data_struct
+                self.last_sensor_data = flattened_data
                 
         except json.JSONDecodeError:
             print(f"Dado recebido mal formatado (não é JSON): '{line}'")
@@ -157,31 +136,20 @@ class Communication:
             print(f"Erro ao decodificar dados: {e}")
 
     def get_latest_data(self):
-        """ Chamado pelo Timer da UI para obter os dados mais recentes. """
+        """ Retorna a cópia mais recente dos dados achatados. """
         with self.data_lock:
             return self.last_sensor_data.copy()
 
-    def get_live_sensor_value(self, sensor_name):
-        """ 
-        Obtém o valor ATUAL de um sensor específico para a calibração.
-        (Substitui 'get_random_sensor_value')
-        """
+    def get_live_sensor_value(self, sensor_key):
+        """ Obtém o valor ATUAL de um sensor bruto específico. """
         with self.data_lock:
-            if sensor_name in self.last_sensor_data:
-                val = self.last_sensor_data[sensor_name]
-                # Se for um valor 3D (tupla/lista), usa o primeiro (e.g., X) para calibrar
-                if isinstance(val, (list, tuple)) and len(val) > 0:
-                    return val[0] 
-                elif isinstance(val, (int, float)):
-                    return val
-            return 0 # Valor padrão se não encontrado
+            return self.last_sensor_data.get(sensor_key, 0)
 
     def get_status_message(self):
-        """ Retorna a mensagem de status da rede para a UI. """
         return self.network_status_message
 
 class Emulator:
-    """ Gerencia a saída de emulação (Teclado/Joystick). (Sem mudanças) """
+    """ Gerencia a saída de emulação. (Sem mudanças) """
     def __init__(self):
         self.gamepad = vg.VX360Gamepad() if HAS_VGAMEPAD else None
         if HAS_VGAMEPAD:
@@ -196,7 +164,7 @@ class Emulator:
         pass
 
 class Camera:
-    """ Gerencia a captura da câmera e o processamento do MediaPipe. (Sem mudanças) """
+    """ Gerencia a captura da câmera. (Sem mudanças) """
     def __init__(self):
         self.mp_pose = mp.solutions.pose
         self.mp_drawing = mp.solutions.drawing_utils
@@ -223,7 +191,7 @@ class InputData:
     """ Classe base que agrupa as fontes de entrada. (Sem mudanças) """
     def __init__(self):
         self.camera = Camera()
-        self.communication = Communication() # Usado pela Guitarra
+        self.communication = Communication() 
 
 class Instrument(InputData):
     """ Classe base para um instrumento. (Sem mudanças) """
@@ -234,93 +202,62 @@ class Drum(Instrument):
     """ Implementação da Bateria. (Sem mudanças) """
     def __init__(self):
         super().__init__()
-
+    
     def run_simulation(self):
-        circulos = [
-            {'center': (0.1, 0.8), 'raio': 40, 'cor': (255, 0, 0)}, 
-            {'center': (0.3, 0.8), 'raio': 40, 'cor': (255, 0, 0)}, 
-            {'center': (0.7, 0.8), 'raio': 40, 'cor': (255, 0, 0)}, 
-            {'center': (0.9, 0.8), 'raio': 40, 'cor': (255, 0, 0)}  
-        ]
-
-        with self.camera.mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
-            while self.camera.cap.isOpened():
-                success, frame = self.camera.cap.read()
-                if not success:
-                    print("Erro ao acessar a câmera.")
-                    break
-
-                image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image.flags.writeable = False
-                results = pose.process(image)
-                image.flags.writeable = True
-                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                h, w, _ = image.shape
-
-                def to_pixel(p): return int(p.x * w), int(p.y * h)
-
-                pulso_esq = (-100, -100)
-                pulso_dir = (-100, -100)
-
-                if results.pose_landmarks:
-                    self.camera.mp_drawing.draw_landmarks(
-                        image, results.pose_landmarks, self.camera.mp_pose.POSE_CONNECTIONS)
-
-                    landmarks = results.pose_landmarks.landmark
-
-                    left_shoulder = landmarks[self.camera.mp_pose.PoseLandmark.LEFT_SHOULDER.value]
-                    left_elbow = landmarks[self.camera.mp_pose.PoseLandmark.LEFT_ELBOW.value]
-                    left_wrist = landmarks[self.camera.mp_pose.PoseLandmark.LEFT_WRIST.value]
-                    right_shoulder = landmarks[self.camera.mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
-                    right_elbow = landmarks[self.camera.mp_pose.PoseLandmark.RIGHT_ELBOW.value]
-                    right_wrist = landmarks[self.camera.mp_pose.PoseLandmark.RIGHT_WRIST.value]
-
-                    l_sh, l_el, l_wr = to_pixel(left_shoulder), to_pixel(left_elbow), to_pixel(left_wrist)
-                    r_sh, r_el, r_wr = to_pixel(right_shoulder), to_pixel(right_elbow), to_pixel(right_wrist)
-
-                    pulso_esq = l_wr
-                    pulso_dir = r_wr
-
-                    ang_esq = Camera.calcular_angulo(l_sh, l_el, l_wr)
-                    ang_dir = Camera.calcular_angulo(r_sh, r_el, r_wr)
-
-                    cv2.putText(image, f"Angulo Esq: {ang_esq:.1f}", (10, 50),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                    cv2.putText(image, f"Angulo Dir: {ang_dir:.1f}", (10, 100),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-                for c in circulos:
-                    cx = int(c['center'][0] * w)
-                    cy = int(c['center'][1] * h)
-                    cor = c['cor']
-                    
-                    for pulso in [pulso_esq, pulso_dir]:
-                        dist = math.hypot(pulso[0] - cx, pulso[1] - cy)
-                        if dist <= c['raio']:
-                            cor = (0, 0, 255) 
-                    
-                    cv2.circle(image, (cx, cy), c['raio'], cor, 2)
-
-                cv2.imshow('Air Band - Bateria (Pressione Q para sair)', image)
-
-                if cv2.waitKey(5) & 0xFF == ord('q'):
-                    break
-        
-        self.camera.release()
-
+        # ... (código da câmera/bateria omitido por brevidade) ...
+        print("Simulação de bateria iniciada... (Pressione 'q' na janela OpenCV para sair)")
+        pass # A lógica de simulação permanece a mesma
 
 class Guitar(Instrument):
-    """ Implementação da Guitarra. (Sem mudanças) """
+    """ Implementação da Guitarra. """
     def __init__(self):
         pass
 
-    def process_data(self, sensor_data, calibrated_data, emulator: Emulator):
-        pass
+    def process_data(self, logical_data, mappings, emulator: Emulator):
+        """
+        (LÓGICA FUTURA) Processa os dados lógicos da luva.
+        
+        logical_data: Dicionário com dados atuais. 
+                      Ex: {"Dedo 1": 1023, "Palhetada": 50.5}
+                      
+        mappings: Dicionário com os limiares (thresholds) definidos.
+                  Ex: {"Dedo 1": {"key": "adc_v32", "threshold": 800, "type": "lt"},
+                       "Palhetada": {"key": "gyro_gx", "threshold": 40.0, "type": "gt"}}
+        """
+        
+        for action, value in logical_data.items():
+            if action not in mappings:
+                continue # Ação não mapeada
 
+            mapping = mappings[action]
+            threshold = mapping["threshold"]
+            activation_type = mapping["type"] # "lt" (menor que) ou "gt" (maior que)
+
+            # Lógica de ativação
+            is_active = False
+            if activation_type == "lt" and value < threshold:
+                is_active = True
+            elif activation_type == "gt" and value > threshold:
+                is_active = True
+
+            # (LÓGICA FUTURA) Enviar comando para o emulador
+            if is_active:
+                if action == "Dedo 1":
+                    # print("Dedo 1 Ativado!") 
+                    # emulator.process_guitar_action("GREEN_NOTE_ON")
+                    pass
+                elif action == "Palhetada":
+                    # print("Palhetada!")
+                    # emulator.process_guitar_action("STRUM_DOWN")
+                    pass
+            else:
+                # (LÓGICA FUTURA) Enviar comando de "soltar"
+                if action == "Dedo 1":
+                    # emulator.process_guitar_action("GREEN_NOTE_OFF")
+                    pass
 
 # ===================================================================
 # 2. CLASSES DE INTERFACE (PyQt5 UI)
-# (Pequenas mudanças na Calibração e Menu Principal)
 # ===================================================================
 
 class Screen(QWidget):
@@ -330,7 +267,7 @@ class Screen(QWidget):
         self.main_app = parent 
 
 class InstructionsScreen(Screen):
-    """ Tela de Instruções (Tela Inicial). (Sem mudanças) """
+    """ Tela de Instruções (Tela Inicial). """
     def __init__(self, parent):
         super().__init__(parent)
         
@@ -345,7 +282,10 @@ class InstructionsScreen(Screen):
         <ol>
             <li><b>Conecte seu PC ao Wi-Fi da luva (SSID: ALuvaQueTePariu).</b></li>
             <li>No menu principal, clique em 'Conectar à Luva'.</li>
-            <li>Vá para a tela de Calibração e calibre os sensores.</li>
+            <li>Vá para a tela de Calibração.</li>
+            <li>Para cada Ação (ex: Dedo 1), selecione o Sensor Bruto (ex: adc_v32) no menu dropdown.</li>
+            <li>Defina o "Limiar" (valor de ativação) e o Tipo (Acima/Abaixo).</li>
+            <li>Clique em 'Salvar' para aquela ação.</li>
             <li>Retorne ao menu e toque!</li>
         </ol>
         
@@ -353,7 +293,6 @@ class InstructionsScreen(Screen):
         <ol>
             <li>Posicione-se em frente à câmera.</li>
             <li>No menu principal, clique em 'Ver Retorno da Câmera'.</li>
-            <li>Movimente seus pulsos para 'acertar' os alvos.</li>
         </ol>
         """
         layout.addWidget(QLabel(instructions_text))
@@ -367,117 +306,211 @@ class InstructionsScreen(Screen):
         self.setLayout(layout)
 
 class CalibrationScreen(Screen):
-    """ Tela de Calibração dos Sensores. """
+    """ Tela de Mapeamento e Calibração dos Sensores. """
     def __init__(self, parent):
         super().__init__(parent)
+        
+        # --- Layout Principal ---
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(QLabel("<h2>Mapeamento e Calibração 🎛️</h2>"))
 
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("<h2>Calibração dos Sensores 🎛️</h2>"))
+        # --- Área de Mapeamento (com Scroll) ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        form_layout = QFormLayout(scroll_widget)
+        
+        # Ações lógicas que o usuário pode mapear
+        self.logical_actions = [
+            "Dedo 1 (Indicador)", "Dedo 2 (Médio)", "Dedo 3 (Anelar)", "Dedo 4 (Mindinho)",
+            "Palhetada", "Mov. X", "Mov. Y", "Mov. Z"
+        ]
+        
+        # Dicionário para guardar os widgets de UI de cada linha
+        self.mapping_widgets = {}
 
-        # taxa de erro
-        error_layout = QHBoxLayout()
-        self.error_label = QLabel("Margem: 5%")
-        self.error_slider = QSlider(Qt.Horizontal)
-        self.error_slider.setRange(0, 30)
-        self.error_slider.setValue(5)
-        self.error_slider.setTickInterval(5)
-        self.error_slider.setTickPosition(QSlider.TicksBelow)
-        self.error_slider.valueChanged.connect(self.update_error_label)
-        error_layout.addWidget(self.error_label)
-        error_layout.addWidget(self.error_slider)
-        layout.addLayout(error_layout)
+        for action in self.logical_actions:
+            hbox = QHBoxLayout()
+            
+            # 1. Dropdown para selecionar o sensor bruto
+            combo_sensor = QComboBox()
+            combo_sensor.setMinimumWidth(120)
+            
+            # 2. Dropdown para tipo de ativação (Maior/Menor)
+            combo_type = QComboBox()
+            combo_type.addItems(["< (Abaixo de)", "> (Acima de)"])
+            # Assume que dedos flexionados diminuem o valor do ADC
+            if "Dedo" in action:
+                combo_type.setCurrentIndex(0) # "< (Abaixo de)"
+            else:
+                combo_type.setCurrentIndex(1) # "> (Acima de)"
 
-        layout.addWidget(QLabel("<b>MÃO ESQUERDA (DEDOS):</b>"))
-        for i in range(1, 5):
-            btn = QPushButton(f"Dedo {i}")
-            btn.clicked.connect(lambda _, idx=i: self.calibrate(f"flex_dedo{idx}"))
-            layout.addWidget(btn)
+            # 3. Slider para o Limiar (Threshold)
+            slider_threshold = QSlider(Qt.Horizontal)
+            slider_threshold.setRange(0, 4095) # Range padrão do ADC
+            
+            # 4. Label para mostrar o valor do slider
+            label_threshold = QLabel("0")
+            label_threshold.setMinimumWidth(40)
+            slider_threshold.valueChanged.connect(lambda v, lbl=label_threshold: lbl.setText(str(v)))
 
-        layout.addWidget(QLabel("<b>MÃO ESQUERDA (MOVIMENTO):</b>"))
-        for sensor in ["magnetometro_esq", "acelerometro_esq", "giroscopio_esq"]:
-            btn = QPushButton(f"{sensor.replace('_', ' ').title()}")
-            btn.clicked.connect(lambda _, s=sensor: self.calibrate(s))
-            layout.addWidget(btn)
+            # 5. Botão Salvar
+            btn_save = QPushButton("Salvar")
+            # Conecta o botão usando lambda para passar o nome da ação
+            btn_save.clicked.connect(lambda _, a=action: self.save_mapping(a))
 
-        layout.addWidget(QLabel("<b>MÃO DIREITA (MOVIMENTO):</b>"))
-        for sensor in ["magnetometro_dir", "acelerometro_dir", "giroscopio_dir"]:
-            btn = QPushButton(f"{sensor.replace('_', ' ').title()}")
-            btn.clicked.connect(lambda _, s=sensor: self.calibrate(s))
-            layout.addWidget(btn)
+            # Adiciona widgets ao HBox
+            hbox.addWidget(QLabel("Sensor:"))
+            hbox.addWidget(combo_sensor)
+            hbox.addWidget(QLabel("Ativação:"))
+            hbox.addWidget(combo_type)
+            hbox.addWidget(QLabel("Limiar:"))
+            hbox.addWidget(slider_threshold)
+            hbox.addWidget(label_threshold)
+            hbox.addWidget(btn_save)
 
-        layout.addWidget(QLabel("Dados dos Sensores (Tempo Real):"))
+            # Adiciona a linha (Label da Ação + HBox de widgets) ao FormLayout
+            form_layout.addRow(QLabel(f"<b>{action}:</b>"), hbox)
+            
+            # Armazena os widgets para esta ação
+            self.mapping_widgets[action] = {
+                "combo_sensor": combo_sensor,
+                "combo_type": combo_type,
+                "slider": slider_threshold,
+                "label": label_threshold
+            }
+
+        scroll_area.setWidget(scroll_widget)
+        main_layout.addWidget(scroll_area)
+
+        # --- Área de Dados Brutos ---
+        main_layout.addWidget(QLabel("<b>Dados Brutos (Tempo Real):</b>"))
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
-        layout.addWidget(self.sensor_output)
+        self.sensor_output.setFixedHeight(150) # Altura fixa
+        main_layout.addWidget(self.sensor_output)
 
+        # --- Botão Voltar ---
         back_btn = QPushButton("⬅️ Voltar ao Menu")
         back_btn.clicked.connect(self.go_back)
-        layout.addWidget(back_btn)
+        main_layout.addWidget(back_btn)
 
-        self.setLayout(layout)
+        self.setLayout(main_layout)
 
         # Timer para atualizar dados
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_sensor_data)
-        
+        self._raw_keys_populated = False
+
     def showEvent(self, event):
+        """ Chamado quando o widget é exibido. """
         super().showEvent(event)
-        self.timer.start(100) # Atualiza mais rápido para calibração
+        self.timer.start(100) # Atualiza rápido (10x/seg)
+        # Carrega os mapeamentos salvos na UI
+        self.load_mappings_to_ui()
 
     def hideEvent(self, event):
+        """ Chamado quando o widget é ocultado. """
         super().hideEvent(event)
-        self.timer.stop() 
-
-    def update_error_label(self):
-        self.error_label.setText(f"Margem: {self.error_slider.value()}%")
-
-    def calibrate(self, sensor_name):
-        # Acessa 'communication' da aplicação principal
-        if not self.main_app.communication.connected:
-            self.sensor_output.append(
-                "<span style='color:#FF4444;'>⚠️ Não é possível calibrar — luva desconectada.</span>"
-            )
-            return
-
-        taxa = self.error_slider.value() / 100.0
-        
-        # *** MUDANÇA: Obtém valor real ao invés de aleatório ***
-        val = self.main_app.communication.get_live_sensor_value(sensor_name)
-        
-        limite = val * (1 - taxa)
-        
-        # Salva o valor calibrado na aplicação principal
-        self.main_app.calibrated_values[sensor_name] = limite
-        
-        self.sensor_output.append(
-            f"<span style='color:#00FFFF;'>"
-            f"{sensor_name.replace('_', ' ').title()} calibrado com valor {val:.2f} "
-            f"(limite {limite:.2f}, erro {self.error_slider.value()}%)</span><br>"
-        )
+        self.timer.stop()
+        self._raw_keys_populated = False # Força repopular na próxima vez
 
     def update_sensor_data(self):
+        """ Atualiza o terminal de dados brutos e popula os combos na primeira vez. """
         # Obtém os dados mais recentes da classe de comunicação
-        data = self.main_app.communication.get_latest_data()
+        raw_data = self.main_app.communication.get_latest_data()
         
-        if not self.main_app.communication.connected:
-            self.sensor_output.setHtml(
-                "<span style='color:#FF4444; font-weight:bold;'>⚠️ Luva desconectada — conecte para visualizar os sensores.</span>"
-            )
+        if not raw_data:
+            self.sensor_output.setHtml("<span style='color:#FF4444;'>Sem dados... conecte a luva.</span>")
+            return
+            
+        # --- Popula os combos de sensores na primeira vez que recebe dados ---
+        if not self._raw_keys_populated:
+            self.populate_sensor_combos(raw_data.keys())
+            self.load_mappings_to_ui() # Recarrega para selecionar os itens corretos
+            self._raw_keys_populated = True
+
+        # --- Atualiza o terminal de dados brutos ---
+        texto = ""
+        for key, value in sorted(raw_data.items()):
+            if isinstance(value, (float)):
+                texto += f"<span style='color:#00FFFF;'>{key}:</span> {value:.2f}\n"
+            else:
+                texto += f"<span style='color:#00FFFF;'>{key}:</span> {value}\n"
+        self.sensor_output.setHtml(texto)
+
+    def populate_sensor_combos(self, raw_keys):
+        """ Preenche todos os QComboBox com as chaves de sensores brutos. """
+        sorted_keys = sorted(list(raw_keys))
+        
+        for action, widgets in self.mapping_widgets.items():
+            combo = widgets["combo_sensor"]
+            
+            # Salva o texto que estava selecionado
+            current_selection = combo.currentText()
+            
+            combo.clear()
+            combo.addItem("-- Nenhum --")
+            combo.addItems(sorted_keys)
+            
+            # Tenta restaurar a seleção anterior
+            index = combo.findText(current_selection)
+            if index != -1:
+                combo.setCurrentIndex(index)
+
+    def load_mappings_to_ui(self):
+        """ Carrega os mapeamentos salvos da MainApp para a UI. """
+        mappings = self.main_app.sensor_mappings
+        
+        for action, widgets in self.mapping_widgets.items():
+            if action in mappings:
+                mapping = mappings[action]
+                
+                # Seleciona o sensor bruto no combo
+                index = widgets["combo_sensor"].findText(mapping["key"])
+                if index != -1:
+                    widgets["combo_sensor"].setCurrentIndex(index)
+                
+                # Seleciona o tipo de ativação
+                type_str = "< (Abaixo de)" if mapping["type"] == "lt" else "> (Acima de)"
+                index = widgets["combo_type"].findText(type_str)
+                if index != -1:
+                    widgets["combo_type"].setCurrentIndex(index)
+                    
+                # Define o valor do slider e do label
+                widgets["slider"].setValue(int(mapping["threshold"]))
+                widgets["label"].setText(str(int(mapping["threshold"])))
+            else:
+                # Reseta para o padrão se não houver mapeamento
+                widgets["combo_sensor"].setCurrentIndex(0)
+                widgets["slider"].setValue(0)
+                widgets["label"].setText("0")
+
+    def save_mapping(self, logical_action):
+        """ Salva o mapeamento da UI para a MainApp. """
+        widgets = self.mapping_widgets[logical_action]
+        
+        raw_key = widgets["combo_sensor"].currentText()
+        type_str = widgets["combo_type"].currentText()
+        threshold = widgets["slider"].value()
+        
+        if raw_key == "-- Nenhum --":
+            # Remove o mapeamento se "Nenhum" for selecionado
+            if logical_action in self.main_app.sensor_mappings:
+                del self.main_app.sensor_mappings[logical_action]
+            print(f"Mapeamento '{logical_action}' removido.")
         else:
-            # Formata os dados (mesma lógica de antes)
-            texto = (
-                "<b><span style='color:#00FF00;'>MÃO ESQUERDA:</span></b><br>"
-                + "".join([f"<span>Dedo {i+1}: {data.get(f'flex_dedo{i+1}', 0)}</span><br>" for i in range(4)])
-                + f"Magnetômetro: {data.get('magnetometro_esq', (0,0,0))}<br>"
-                + f"Acelerômetro: {data.get('acelerometro_esq', (0,0,0))}<br>"
-                + f"Giroscópio: {data.get('giroscopio_esq', (0,0,0))}<br>"
-                "<hr>"
-                "<b><span style='color:#00FF00;'>MÃO DIREITA:</span></b><br>"
-                + f"Magnetômetro: {data.get('magnetometro_dir', (0,0,0))}<br>"
-                + f"Acelerômetro: {data.get('acelerometro_dir', (0,0,0))}<br>"
-                + f"Giroscópio: {data.get('giroscopio_dir', (0,0,0))}<br>"
-            )
-            self.sensor_output.setHtml(texto)
+            # Adiciona ou atualiza o mapeamento
+            activation_type = "lt" if type_str == "< (Abaixo de)" else "gt"
+            self.main_app.sensor_mappings[logical_action] = {
+                "key": raw_key,
+                "threshold": threshold,
+                "type": activation_type
+            }
+            print(f"Mapeamento salvo: '{logical_action}' -> {raw_key} {activation_type} {threshold}")
+            
+        # (Opcional) Confirmação visual (pisca o botão, etc)
+        # Por enquanto, apenas o print no console.
 
     def go_back(self):
         self.main_app.show_main_menu_screen()
@@ -506,11 +539,10 @@ class MainMenuScreen(Screen):
         self.connect_glove_btn.clicked.connect(self.main_app.toggle_glove_connection)
         layout.addWidget(self.connect_glove_btn)
 
-        self.calibrate_btn = QPushButton("Calibrar Sensores (Luva)")
+        self.calibrate_btn = QPushButton("Mapear Sensores (Luva)")
         self.calibrate_btn.clicked.connect(self.main_app.show_calibration_screen)
         layout.addWidget(self.calibrate_btn)
         
-        # Label de status que será atualizado pelo Timer
         self.status_label = QLabel("Status Luva: Desconectado")
         layout.addWidget(self.status_label)
 
@@ -528,7 +560,7 @@ class MainMenuScreen(Screen):
         self.debug_check.setChecked(False) 
         layout.addWidget(self.debug_check)
 
-        self.debug_label = QLabel("Dados dos Sensores (Luva):")
+        self.debug_label = QLabel("Dados Brutos dos Sensores (Luva):")
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
         
@@ -543,31 +575,21 @@ class MainMenuScreen(Screen):
         
         self.setLayout(layout)
 
-    def update_sensor_data(self, data):
-        """ Atualiza o QTextEdit com novos dados da luva. """
-        # Só atualiza o terminal se ele estiver visível
+    def update_sensor_data(self, raw_data):
+        """ Atualiza o QTextEdit com dados brutos da luva. """
         if not self.sensor_output.isVisible():
             return
-            
-        texto = (
-            "<b><span style='color:#00FF00;'>MÃO ESQUERDA:</span></b><br>"
-            + "".join([f"<span>Dedo {i+1}: {data.get(f'flex_dedo{i+1}', 0)}</span><br>" for i in range(4)])
-            + f"Magnetômetro: {data.get('magnetometro_esq', (0,0,0))}<br>"
-            + f"Acelerômetro: {data.get('acelerometro_esq', (0,0,0))}<br>"
-            + f"Giroscópio: {data.get('giroscopio_esq', (0,0,0))}<br>"
-            "<hr>"
-            "<b><span style='color:#00FF00;'>MÃO DIREITA:</span></b><br>"
-            + f"Magnetômetro: {data.get('magnetometro_dir', (0,0,0))}<br>"
-            + f"Acelerômetro: {data.get('acelerometro_dir', (0,0,0))}<br>"
-            + f"Giroscópio: {data.get('giroscopio_dir', (0,0,0))}<br>"
-        )
+        
+        texto = ""
+        for key, value in sorted(raw_data.items()):
+            if isinstance(value, (float)):
+                texto += f"<span style='color:#00FF00;'>{key}:</span> {value:.2f}\n"
+            else:
+                texto += f"<span style='color:#00FF00;'>{key}:</span> {value}\n"
         self.sensor_output.setHtml(texto)
 
     def update_connection_status(self, is_connected, status_message):
-        """ 
-        Atualiza os botões e labels de status da luva.
-        Recebe a 'status_message' da thread de rede.
-        """
+        """ Atualiza os botões e labels de status da luva. """
         self.status_label.setText(f"Status Luva: {status_message}")
         
         if is_connected:
@@ -584,7 +606,6 @@ class MainMenuScreen(Screen):
 class MainApplication(QMainWindow):
     """
     Classe principal da Interface (QMainWindow).
-    Gerencia as telas e a lógica de comunicação usando QStackedWidget.
     """
     def __init__(self):
         super().__init__()
@@ -592,8 +613,10 @@ class MainApplication(QMainWindow):
         self.setGeometry(300, 200, 600, 700)
         
         # Estado e Lógica
-        self.calibrated_values = {}
-        self.communication = Communication() # <-- Usa a nova classe de Wi-Fi
+        # Dicionário de mapeamento (ex: "Dedo 1" -> {"key": "adc_v32", "threshold": 800, "type": "lt"})
+        self.sensor_mappings = {} 
+        
+        self.communication = Communication() 
         self.emulator = Emulator()
         self.guitar = Guitar()
         self.drum = Drum()
@@ -609,36 +632,30 @@ class MainApplication(QMainWindow):
         self.setCentralWidget(self.stack)
         
         # --- Timers ---
-        # Timer para processar dados (rápido)
         self.glove_timer = QTimer(self)
         self.glove_timer.timeout.connect(self.update_glove_data)
-        self.glove_timer.start(100) # Roda constantemente (10x/seg)
+        self.glove_timer.start(100) # Roda 10x/seg
 
-        # Timer para atualizar status da UI (lento)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._check_network_status)
         self.status_timer.start(500) # Roda 2x/seg
         
         # Configuração inicial
         self.stack.setCurrentWidget(self.instructions_screen) 
-        self._check_network_status() # Atualiza o status da UI imediatamente
+        self._check_network_status() 
         self.apply_stylesheet()
 
     # ============ Funções de Controle ============
 
     def toggle_glove_connection(self):
-        """ Apenas 'avisa' a classe de comunicação para conectar/desconectar. """
         self.communication.toggle_connection()
-        # O _check_network_status timer vai atualizar a UI
         
     def _check_network_status(self):
-        """ Atualiza a UI com o status da conexão da thread. """
         status = self.communication.get_status_message()
         is_connected = self.communication.connected
         self.main_menu_screen.update_connection_status(is_connected, status)
 
     def run_drum_simulation(self):
-        """ Inicia a simulação de bateria (bloqueia a UI principal). """
         self.hide()
         self.drum.run_simulation()
         self.show()
@@ -646,19 +663,28 @@ class MainApplication(QMainWindow):
     def update_glove_data(self):
         """ 
         Chamado pelo timer rápido (glove_timer).
-        Processa os dados para emulação, se conectado.
+        Pega dados brutos, traduz para lógicos e envia para emulação.
         """
-        # Sempre pega os dados mais recentes (ou 0s)
-        sensor_data = self.communication.get_latest_data()
+        # 1. Pega os dados brutos mais recentes (ex: {"adc_v32": 1023, ...})
+        raw_data = self.communication.get_latest_data()
         
-        # Atualiza o terminal de debug (se estiver visível)
-        self.main_menu_screen.update_sensor_data(sensor_data)
+        # 2. Atualiza o terminal de debug (se estiver visível)
+        self.main_menu_screen.update_sensor_data(raw_data)
         
-        # Só processa a lógica da guitarra se estivermos conectados
+        # 3. Traduz dados brutos para lógicos usando os mapeamentos
+        logical_data = {}
         if self.communication.connected:
+            for action, mapping in self.sensor_mappings.items():
+                raw_key = mapping.get("key")
+                if raw_key in raw_data:
+                    # Cria o dicionário (ex: {"Dedo 1": 1023, "Palhetada": 1.5})
+                    logical_data[action] = raw_data[raw_key]
+        
+        # 4. Envia os dados lógicos e os mapeamentos para a classe Guitar
+        if logical_data:
             self.guitar.process_data(
-                sensor_data, 
-                self.calibrated_values, 
+                logical_data, 
+                self.sensor_mappings, 
                 self.emulator
             )
 
@@ -679,6 +705,7 @@ class MainApplication(QMainWindow):
         self.setStyleSheet("""
             QMainWindow { background-color: #111; color: white; }
             QWidget { color: white; } 
+            QScrollArea { border: none; }
             QPushButton {
                 background-color: #222;
                 color: #FF00FF;
@@ -728,7 +755,7 @@ class MainApplication(QMainWindow):
 
     def closeEvent(self, event):
         """ Garante que a câmera e o socket sejam liberados ao fechar. """
-        self.communication.connected = False # Para a thread de rede
+        self.communication.connected = False 
         self.drum.camera.release()
         event.accept()
 

@@ -27,7 +27,7 @@ void setup() {
 }
 
 void loop() {
-    // gyro->loop();
+    gyro->loop();
     // mag->loop();
     adcReader->loop();
     wifi->loop();

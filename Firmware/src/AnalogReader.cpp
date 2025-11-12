@@ -59,10 +59,10 @@ void AnalogReader::loop() {
         readData();
 
         // Imprime os valores no console (com 2 casas decimais)
-        Serial.print("ADC D32: "); Serial.print(voltage32, 2);
-        Serial.print("V | D33: "); Serial.print(voltage33, 2);
-        Serial.print("V | D34: "); Serial.print(voltage34, 2);
-        Serial.print("V | D35: "); Serial.print(voltage35, 2);
-        Serial.println("V");
+        // Serial.print("ADC D32: "); Serial.print(voltage32, 2);
+        // Serial.print("V | D33: "); Serial.print(voltage33, 2);
+        // Serial.print("V | D34: "); Serial.print(voltage34, 2);
+        // Serial.print("V | D35: "); Serial.print(voltage35, 2);
+        // Serial.println("V");
     }
 }
