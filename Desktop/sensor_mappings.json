@@ -1,0 +1,28 @@
+{
+    "Batida para Baixo": {
+        "key_prefix": "gyro_",
+        "rest": {
+            "ax": -0.2,
+            "ay": -0.08,
+            "az": 0.95
+        },
+        "peak": {
+            "ax": -0.2,
+            "ay": -0.08,
+            "az": 0.95
+        }
+    },
+    "Batida para Cima": {
+        "key_prefix": "gyro_",
+        "rest": {
+            "ax": -0.04,
+            "ay": -0.12,
+            "az": 0.97
+        },
+        "peak": {
+            "ax": -0.04,
+            "ay": -0.12,
+            "az": 0.97
+        }
+    }
+}
