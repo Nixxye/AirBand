@@ -1,22 +1,15 @@
-# main.py
+from gui import MainApplication
+import qt_material
 import sys
-from PySide6.QtWidgets import QApplication
-from qfluentwidgets import setTheme, Theme
+from PyQt5.QtWidgets import QApplication
 
-# Importa a janela principal do arquivo ui
-from app_ui import MainApplication
-
-# ===================================================================
-# 3. EXECUÇÃO DA APLICAÇÃO
-# ===================================================================
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # Define o tema (Dark)
-    setTheme(Theme.DARK)
+    # Aplica o tema Qt-Material
+    qt_material.apply_stylesheet(app, theme='dark_blue.xml')
 
     window = MainApplication()
     window.show()
-
-    sys.exit(app.exec())
+    sys.exit(app.exec_())
