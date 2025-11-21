@@ -3,6 +3,11 @@ import json
 from emulator import Emulator
 from instruments import Guitar, Drum
 from communication import Communication
+import cv2          
+import mediapipe as mp 
+import numpy as np  
+from PyQt5.QtGui import QImage, QPixmap
+
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -11,14 +16,15 @@ from PyQt5.QtWidgets import (
     QScrollArea, QLineEdit, QMessageBox,
     QGroupBox, QFrame, QTabWidget, QMainWindow
 )
-from PyQt5.QtCore import QTimer, Qt, pyqtSlot
-
+from PyQt5.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 
 class MainApplication(QMainWindow):
     """
     Classe principal da Interface (QMainWindow).
     Monta as abas e gerencia os timers e a lógica.
     """
+
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Air Band 🤘")
@@ -102,11 +108,6 @@ class MainApplication(QMainWindow):
         # Passa o status para a aba de controle
         self.main_menu_tab.update_connection_status(is_connected, status)
 
-    def run_drum_simulation(self):
-        self.hide()
-        self.drum.run_simulation()
-        self.show()
-
     def update_glove_data(self):
         """ Pega dados da lógica e passa para a UI e processamento """
         raw_data = self.communication.get_latest_data()
@@ -140,7 +141,6 @@ class MainApplication(QMainWindow):
     def closeEvent(self, event):
         """ Garante que a câmera e o socket sejam liberados ao fechar. """
         self.communication.connected = False 
-        self.drum.camera.release()
         event.accept()
 
 
@@ -211,8 +211,8 @@ class CalibrationScreen(Screen):
         self.temp_snapshots = {}
         self.logical_actions = [
             "Dedo 1 (Indicador)", "Dedo 2 (Médio)", "Dedo 3 (Anelar)", "Dedo 4 (Mindinho)",
-            "Batida para Baixo", "Batida para Cima"
         ]
+           
         self.is_recording_peak = False
         self.current_peak_snapshot = {}
         self.current_peak_magnitude = -1.0
@@ -595,7 +595,7 @@ class MainMenuScreen(Screen):
         drum_layout = QVBoxLayout(drum_group)
 
         self.camera_feedback_btn = QPushButton("Ver Retorno da Câmera (Bateria)")
-        self.camera_feedback_btn.clicked.connect(self.main_app.run_drum_simulation)
+        self.camera_feedback_btn.clicked.connect(self.toggle_camera_feedback) 
         drum_layout.addWidget(self.camera_feedback_btn)
 
         left_column.addWidget(drum_group)
@@ -627,6 +627,16 @@ class MainMenuScreen(Screen):
         debug_layout.addWidget(self.sensor_output)
 
         right_column.addWidget(self.debug_group)
+
+        self.camera_widget = CameraWidget(self) 
+        self.camera_widget.camera_data_signal.connect(self.update_camera_data)
+
+        camera_frame = QGroupBox("Retorno da Câmera 🥁")
+        camera_layout = QVBoxLayout(camera_frame)
+        camera_layout.addWidget(self.camera_widget)
+
+        right_column.addWidget(camera_frame)
+
         right_column.addStretch() 
 
         main_layout.addLayout(left_column, 1) 
@@ -657,3 +667,294 @@ class MainMenuScreen(Screen):
                 self.sensor_output.setHtml(
                     f"<span style='color:#FF4444; font-weight:bold;'>⚠️ {status_message}</span>"
                 )
+    
+    def toggle_camera_feedback(self):
+        # Verifica se a câmera está atualmente aberta (cap é o objeto cv2.VideoCapture)
+        is_camera_on = self.camera_widget.cap is not None and self.camera_widget.cap.isOpened()
+        
+        if is_camera_on:
+            # Se a câmera está LIGADA, vamos DESLIGAR
+            self.camera_widget.stop_camera()
+            self.camera_feedback_btn.setText("Ver Retorno da Câmera (Bateria)")
+            # Opcional: Desliga a luz de fundo do QLabel
+            self.camera_widget.video_label.setStyleSheet("") 
+            
+        else:
+            # Se a câmera está DESLIGADA, vamos LIGAR
+            self.camera_widget.start_camera()
+            self.camera_feedback_btn.setText("Parar Retorno da Câmera (Bateria)")
+            # Opcional: Adiciona um fundo escuro/preto para dar a impressão de que está ativo/pronto
+            self.camera_widget.video_label.setStyleSheet("background-color: black;")
+
+    def update_camera_data(self, data):
+        """ Recebe os dados da câmera e os exibe no terminal de debug. """
+        # Só atualiza se o terminal de debug estiver checado
+        if not self.debug_group.isChecked():
+            return
+        
+        texto = "<span style='color:#00FFFF;'>--- DADOS DA BATERIA (CÂMERA) ---</span>\n"
+        
+        # Formata os ângulos
+        texto += f"<span style='color:#FFFF00;'>Vert. Esq:</span> {data['Angulo_Esq_Vert']:.1f}° (Lim: {data['Limite_Vert']:.1f}°)\n"
+        texto += f"<span style='color:#FFFF00;'>Vert. Dir:</span> {data['Angulo_Dir_Vert']:.1f}°\n"
+        texto += f"<span style='color:#00FF00;'>Cotov. Esq:</span> {data['Angulo_Esq_Cotovelo']:.1f}°\n"
+        texto += f"<span style='color:#00FF00;'>Cotov. Dir:</span> {data['Angulo_Dir_Cotovelo']:.1f}°\n"
+        
+        # Formata os hits
+        hit_color = "#FF4444" if data['Baterias_Ativadas'] != "Nenhuma" else "#AAAAAA"
+        texto += f"<span style='color:{hit_color}; font-weight:bold;'>HITS:</span> {data['Baterias_Ativadas']}\n"
+        
+        # Atualiza o terminal
+        self.sensor_output.setHtml(texto)
+
+# =======================================================================
+# --- NOVO BLOCO: LÓGICA DA CÂMERA INTEGRADA (PyQt + OpenCV + MediaPipe) ---
+# =======================================================================
+
+# Função auxiliar de cálculo de ângulo (do seu camera.py)
+def calcular_angulo(a, b, c):
+    angulo = math.degrees(
+        math.atan2(c[1] - b[1], c[0] - b[0]) -
+        math.atan2(a[1] - b[1], a[0] - b[0])
+    )
+    angulo = abs(angulo)
+    if angulo > 180:
+        angulo = 360 - angulo
+    return angulo
+
+def linha_tracejada(img, p1, p2, cor, espessura=1, tamanho_tracejado=10):
+    p1 = np.array(p1)
+    p2 = np.array(p2)
+    dist = np.linalg.norm(p1 - p2)
+    direcao = (p2 - p1) / dist
+    for i in range(0, int(dist), tamanho_tracejado * 2):
+        inicio = tuple(np.int32(p1 + direcao * i))
+        fim = tuple(np.int32(p1 + direcao * (i + tamanho_tracejado)))
+        cv2.line(img, inicio, fim, cor, espessura)
+
+class CameraWidget(QWidget):
+    """
+    Widget que exibe o feed da câmera usando OpenCV e QTimer,
+    processando o frame com MediaPipe.
+    """
+    camera_data_signal = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        self.w, self.h = 640, 480 # Resolução padrão
+        self.setFixedSize(self.w, self.h)
+        
+        # --- Configuração do Layout e Label ---
+        layout = QVBoxLayout(self)
+        self.video_label = QLabel("Aguardando Câmera...")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setFixedSize(self.w, self.h)
+        layout.addWidget(self.video_label)
+        self.setLayout(layout)
+        
+        # --- Configuração da Câmera e MediaPipe ---
+        self.cap = None
+        self.mp_pose = mp.solutions.pose
+        self.pose_processor = self.mp_pose.Pose(
+            min_detection_confidence=0.5, 
+            min_tracking_confidence=0.5
+        )
+        self.mp_drawing = mp.solutions.drawing_utils
+
+        self.circulos = [
+            {'center': [0.1, 0.8], 'raio': 40, 'cor': (255, 0, 0)},
+            {'center': [0.3, 0.8], 'raio': 40, 'cor': (255, 0, 0)},
+            {'center': [0.7, 0.8], 'raio': 40, 'cor': (255, 0, 0)},
+            {'center': [0.9, 0.8], 'raio': 40, 'cor': (255, 0, 0)}
+        ] # Posições normalizadas e raio em pixels
+
+        self.limite_angulo_vert = 130.0
+        self.limite_angulo_cotovelo = 150.0
+        self.delta_limite = 2.0
+        
+        # Timer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_frame)
+
+    def start_camera(self):
+        """ Inicializa a captura da câmera e o timer. """
+        if self.cap is None or not self.cap.isOpened():
+            # Tenta abrir o dispositivo 0
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                self.video_label.setText("Erro ao abrir a câmera (cv2.VideoCapture(0))")
+                return
+            
+        self.timer.start(30) # Aprox. 33ms para 30 FPS
+
+    def stop_camera(self):
+        """ Para o timer e libera o objeto de captura. """
+        self.timer.stop()
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+            self.video_label.setText("Câmera Desligada")
+
+    # Dentro da classe CameraWidget...
+    
+    def to_pixel(self, landmark, w, h):
+        """ Converte coordenadas normalizadas do MediaPipe para pixels. """
+        return int(landmark.x * w), int(landmark.y * h)
+
+    @pyqtSlot()
+    def update_frame(self):
+        """ Lê, processa com MediaPipe (incluindo lógica de ângulos) e exibe. """
+        ret, frame = self.cap.read()
+        if not ret:
+            self.stop_camera()
+            return
+            
+        # 1. Pré-processamento
+        frame = cv2.flip(frame, 1) # Espelha a imagem
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        
+        # 2. Processamento MediaPipe
+        results = self.pose_processor.process(image)
+        
+        # 3. Desenho e Lógica
+        image.flags.writeable = True
+        # Converter para BGR para que o OpenCV possa desenhar nele (incluindo o texto)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) 
+
+        h, w, _ = image.shape
+        pulso_esq = pulso_dir = (-100, -100) # Inicializa fora da tela
+        
+
+        if results.pose_landmarks:
+            landmarks = results.pose_landmarks.landmark
+
+            # Obtém Landmarks
+            l_sh = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value], w, h)
+            l_el = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW.value], w, h)
+            l_wr = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST.value], w, h)
+            r_sh = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value], w, h)
+            r_el = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW.value], w, h)
+            r_wr = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST.value], w, h)
+
+            pulso_esq, pulso_dir = l_wr, r_wr # Atualiza a posição dos pulsos
+
+            # CÁLCULOS DE ÂNGULO (Cotovelo e Vertical)
+            ang_esq = calcular_angulo(l_sh, l_el, l_wr)
+            ang_dir = calcular_angulo(r_sh, r_el, r_wr)
+
+            l_vert = (l_sh[0], l_sh[1] - 150) # Ponto auxiliar vertical (fixo)
+            r_vert = (r_sh[0], r_sh[1] - 150)
+            ang_esq_vert = calcular_angulo(l_el, l_sh, l_vert)
+            ang_dir_vert = calcular_angulo(r_el, r_sh, r_vert)
+
+            # LÓGICA DE COR (Limites)
+            cor_esq_vert = (0, 255, 128)
+            cor_dir_vert = (255, 128, 0)
+            
+
+            if ang_esq_vert < self.limite_angulo_vert: # Se o ângulo está dentro do limite de toque
+                cor_esq_vert = (0, 0, 255) # Cor de 'toque'
+            if ang_dir_vert < self.limite_angulo_vert:
+                cor_dir_vert = (0, 0, 255)
+
+            cor_esq_cot = (0, 255, 0)
+            cor_dir_cot = (0, 255, 255)
+            if ang_esq > self.limite_angulo_cotovelo:
+                cor_esq_cot = (255, 0, 255)
+            if ang_dir > self.limite_angulo_cotovelo:
+                cor_dir_cot = (255, 0, 255)
+
+            # DESENHO DE LINHAS
+            cv2.line(image, l_sh, l_el, (0, 255, 0), 3)
+            cv2.line(image, l_el, l_wr, (0, 255, 0), 3)
+            cv2.line(image, r_sh, r_el, (0, 255, 255), 3)
+            cv2.line(image, r_el, r_wr, (0, 255, 255), 3)
+
+            linha_tracejada(image, l_sh, l_vert, (200, 200, 200), espessura=1)
+            linha_tracejada(image, r_sh, r_vert, (200, 200, 200), espessura=1)
+
+            # DESENHO DE CÍRCULOS (Landmarks)
+            cv2.circle(image, l_sh, 8, cor_esq_vert, -1)
+            cv2.circle(image, l_el, 8, cor_esq_cot, -1)
+            cv2.circle(image, l_wr, 8, (0, 200, 200), -1)
+            cv2.circle(image, r_sh, 8, cor_dir_vert, -1)
+            cv2.circle(image, r_el, 8, cor_dir_cot, -1)
+            cv2.circle(image, r_wr, 8, (0, 200, 255), -1)
+
+            # TEXTO DOS ÂNGULOS
+            cv2.putText(image, f"{ang_esq:.1f}°", (l_el[0]+10, l_el[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_esq_cot, 2)
+            cv2.putText(image, f"{ang_esq_vert:.1f}°", (l_sh[0]+10, l_sh[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_esq_vert, 2)
+            cv2.putText(image, f"{ang_dir:.1f}°", (r_el[0]+10, r_el[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_dir_cot, 2)
+            cv2.putText(image, f"{ang_dir_vert:.1f}°", (r_sh[0]+10, r_sh[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_dir_vert, 2)
+            
+            # TEXTO DE DEBUG NO CANTO
+            cv2.putText(image, f"Vert Esq (ombro): {ang_esq_vert:.1f}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_esq_vert, 2)
+            cv2.putText(image, f"Vert Dir (ombro): {ang_dir_vert:.1f}", (10, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_dir_vert, 2)
+            cv2.putText(image, f"Limite vertical: {self.limite_angulo_vert:.1f} graus", (10, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+        
+        # DESENHO DOS TAMBORES VIRTUAIS
+        for c in self.circulos:
+            cx = int(c['center'][0] * w) # Usa o centro normalizado
+            cy = int(c['center'][1] * h)
+            cor = c['cor']
+            
+            # Checa a colisão do pulso com o tambor (adapte esta lógica de pulso para a sua simulação real)
+            for pulso in [pulso_esq, pulso_dir]:
+                dist = math.hypot(pulso[0] - cx, pulso[1] - cy)
+                if dist <= c['raio']:
+                    cor = (0, 0, 255) # Cor de 'hit'
+            
+        hits = [] # Inicializa a lista de hits UMA VEZ antes do loop
+        for i, c in enumerate(self.circulos):
+            cx = int(c['center'][0] * w) 
+            cy = int(c['center'][1] * h)
+            cor = c['cor'] # Cor padrão
+            
+            is_hit = False
+            # Verifica se algum pulso (punho esquerdo ou direito) está dentro do raio
+            for pulso in [pulso_esq, pulso_dir]:
+                # Só checa se o pulso foi detectado (coordenadas positivas)
+                if pulso[0] > 0 and pulso[1] > 0:
+                    dist = math.hypot(pulso[0] - cx, pulso[1] - cy)
+                    if dist <= c['raio']:
+                        is_hit = True
+                        break
+            
+            if is_hit:
+                hits.append(f"Drum {i+1}") # Coleta o hit para o signal
+                cor = (0, 0, 255) # Cor de 'hit' para o desenho (TODOS os hits)
+            
+            # Desenha o círculo no frame
+            cv2.circle(image, (cx, cy), c['raio'], cor, 2)
+        
+        camera_data = {
+            "Angulo_Esq_Cotovelo": ang_esq,
+            "Angulo_Dir_Cotovelo": ang_dir,
+            "Angulo_Esq_Vert": ang_esq_vert,
+            "Angulo_Dir_Vert": ang_dir_vert,
+            "Baterias_Ativadas": ", ".join(hits) if hits else "Nenhuma",
+            "Limite_Vert": self.limite_angulo_vert,
+            "Camera_Ativa": True
+        }
+        self.camera_data_signal.emit(camera_data)
+            
+        # 4. Exibir no Qt (agora convertendo o frame BGR para RGB novamente)
+        rgb_display = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        bytes_per_line = 3 * w
+        qt_image = QImage(rgb_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        
+        # Redimensiona o pixmap para o tamanho do label
+        scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+            self.video_label.size(), 
+            Qt.KeepAspectRatio
+        )
+        self.video_label.setPixmap(scaled_pixmap)
+
+    def closeEvent(self, event):
+        """ Garante que a câmera seja liberada ao fechar o widget. """
+        self.stop_camera()
+        super().closeEvent(event)
+
+# =======================================================================
