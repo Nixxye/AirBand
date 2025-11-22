@@ -26,7 +26,6 @@ class Emulator:
     def process_drum_action(self, action): pass
 
 
-
 class InputData:
     """ Classe base que agrupa as fontes de entrada. """
     def __init__(self):

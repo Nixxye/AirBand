@@ -3,6 +3,7 @@ import socket
 import struct
 import time
 
+
 class Communication:
     """
     Gerencia a recepção de dados via UDP (Alta Performance).

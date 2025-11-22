@@ -1,63 +1,52 @@
 import sys
-import random
-try:
-    import vgamepad as vg
-    HAS_VGAMEPAD = True
-except ImportError:
-    HAS_VGAMEPAD = False
-
+import math
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QComboBox, QTextEdit, QSlider
+    QPushButton, QTextEdit, QSlider
 )
 from PyQt5.QtCore import QTimer, Qt
 
+from communication import Communication
 
-# ===================== Tela de calibração =====================
+
 class CalibrationWidget(QWidget):
     def __init__(self, parent):
         super().__init__()
         self.parent = parent
-
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("<h2>Calibração dos Sensores 🎛️</h2>"))
+        layout.addWidget(QLabel("<h2>Calibração Real 🎛️</h2>"))
 
-        # taxa de erro
+        # Taxa de erro
         error_layout = QHBoxLayout()
         self.error_label = QLabel("Margem: 5%")
         self.error_slider = QSlider(Qt.Horizontal)
-        self.error_slider.setRange(0, 30)
+        self.error_slider.setRange(0, 50)
         self.error_slider.setValue(5)
-        self.error_slider.setTickInterval(5)
-        self.error_slider.setTickPosition(QSlider.TicksBelow)
-        self.error_slider.valueChanged.connect(self.update_error_label)
+        self.error_slider.valueChanged.connect(lambda: self.error_label.setText(f"Margem: {self.error_slider.value()}%"))
         error_layout.addWidget(self.error_label)
         error_layout.addWidget(self.error_slider)
         layout.addLayout(error_layout)
 
-        layout.addWidget(QLabel("<b>MÃO ESQUERDA:</b>"))
+        layout.addWidget(QLabel("<b>SENSORES DISPONÍVEIS:</b>"))
 
-        # Botões de calibração — Mão Esquerda
+        # Botões Flex
+        hbox_flex = QHBoxLayout()
         for i in range(1, 5):
-            btn = QPushButton(f"Dedo {i}")
+            btn = QPushButton(f"Flex {i}")
             btn.clicked.connect(lambda _, idx=i: self.calibrate(f"flex_dedo{idx}"))
-            layout.addWidget(btn)
+            hbox_flex.addWidget(btn)
+        layout.addLayout(hbox_flex)
 
+        # Botões IMU
+        hbox_imu = QHBoxLayout()
         for sensor in ["magnetometro_esq", "acelerometro_esq", "giroscopio_esq"]:
-            btn = QPushButton(f"{sensor.replace('_', ' ').title()}")
+            btn = QPushButton(f"{sensor.split('_')[0].title()}")
             btn.clicked.connect(lambda _, s=sensor: self.calibrate(s))
-            layout.addWidget(btn)
+            hbox_imu.addWidget(btn)
+        layout.addLayout(hbox_imu)
 
-        layout.addWidget(QLabel("<b>MÃO DIREITA:</b>"))
-
-        # Botões de calibração — Mão Direita
-        for sensor in ["magnetometro_dir", "acelerometro_dir", "giroscopio_dir"]:
-            btn = QPushButton(f"{sensor.replace('_', ' ').title()}")
-            btn.clicked.connect(lambda _, s=sensor: self.calibrate(s))
-            layout.addWidget(btn)
-
-        layout.addWidget(QLabel("Dados dos Sensores:"))
+        layout.addWidget(QLabel("Feedback:"))
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
         layout.addWidget(self.sensor_output)
@@ -68,137 +57,84 @@ class CalibrationWidget(QWidget):
 
         self.setLayout(layout)
 
-        # Timer para atualizar dados
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_sensor_data)
-        self.timer.start(1000)
-
-    def update_error_label(self):
-        self.error_label.setText(f"Margem: {self.error_slider.value()}%")
+        self.timer.timeout.connect(self.update_display)
+        self.timer.start(200)
 
     def calibrate(self, sensor_name):
-        if not self.parent.connected:
-            self.sensor_output.append(
-                "<span style='color:#FF4444;'>⚠️ Não é possível calibrar — luva desconectada.</span>"
-            )
+        if not self.parent.comm.connected:
+            self.sensor_output.append("<span style='color:red'>ERRO: Conecte a luva primeiro!</span>")
             return
 
+        val = self.parent.get_sensor_value_for_calibration(sensor_name)
         taxa = self.error_slider.value() / 100.0
-        val = self.parent.get_random_sensor_value(sensor_name)
         limite = val * (1 - taxa)
+
         self.parent.calibrated_values[sensor_name] = limite
+
         self.sensor_output.append(
-            f"<span style='color:#00FFFF;'>"
-            f"{sensor_name.replace('_', ' ').title()} calibrado com valor {val:.2f} "
-            f"(limite {limite:.2f}, erro {self.error_slider.value()}%)</span><br>"
+            f"<b style='color:cyan'>{sensor_name}</b>: Ref={val:.1f} | "
+            f"Limite={limite:.1f} (Margem {self.error_slider.value()}%)"
         )
 
-    def update_sensor_data(self):
-        # Verifica se a luva está conectada
-        if not self.parent.connected:
-            self.sensor_output.setHtml(
-                "<span style='color:#FF4444; font-weight:bold;'>⚠️ Luva desconectada — conecte para visualizar os sensores.</span>"
-            )
-            return
-
-        # Gera e mostra dados normalmente
-        data = self.parent.generate_sensor_data()
-        texto = (
-            "<b><span style='color:#00FF00;'>MÃO ESQUERDA:</span></b><br>"
-            + "".join([f"<span>Dedo {i+1}: {data[f'flex_dedo{i+1}']}</span><br>" for i in range(4)])
-            + f"Magnetômetro: X={data['magnetometro_esq'][0]}, Y={data['magnetometro_esq'][1]}, Z={data['magnetometro_esq'][2]}<br>"
-            + f"Acelerômetro: X={data['acelerometro_esq'][0]}, Y={data['acelerometro_esq'][1]}, Z={data['acelerometro_esq'][2]}<br>"
-            + f"Giroscópio: X={data['giroscopio_esq'][0]}, Y={data['giroscopio_esq'][1]}, Z={data['giroscopio_esq'][2]}<br>"
-            "<hr>"
-            "<b><span style='color:#00FF00;'>MÃO DIREITA:</span></b><br>"
-            + f"Magnetômetro: X={data['magnetometro_dir'][0]}, Y={data['magnetometro_dir'][1]}, Z={data['magnetometro_dir'][2]}<br>"
-            + f"Acelerômetro: X={data['acelerometro_dir'][0]}, Y={data['acelerometro_dir'][1]}, Z={data['acelerometro_dir'][2]}<br>"
-            + f"Giroscópio: X={data['giroscopio_dir'][0]}, Y={data['giroscopio_dir'][1]}, Z={data['giroscopio_dir'][2]}<br>"
-        )
-        self.sensor_output.setHtml(texto)
+    def update_display(self):
+        if not self.parent.comm.connected: return
+        data = self.parent.get_mapped_data()
+        msg = "<b>Valores em Tempo Real:</b><br>"
+        msg += f"Flex 1: {data['flex_dedo1']:.0f}<br>"
+        # Mostra magnitude para o usuário entender o que está sendo calibrado
+        acc_vec = data['acelerometro_esq']
+        acc_mag = math.sqrt(acc_vec[0]**2 + acc_vec[1]**2 + acc_vec[2]**2)
+        msg += f"Acc Mag: {acc_mag:.1f}<br>"
+        self.sensor_output.setHtml(msg)
 
     def go_back(self):
         self.timer.stop()
         self.parent.show_main_window()
 
 
-# ===================== Tela principal =====================
 class AirBandApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Air Band 🤘")
         self.setGeometry(300, 200, 600, 700)
 
+        self.comm = Communication()
         self.calibrated_values = {}
 
-        # ----- Widgets principais -----
-        self.instrument_label = QLabel("Selecione o instrumento:")
-        self.instrument_combo = QComboBox()
-        self.instrument_combo.addItems(["Guitarra", "Bateria"])
-
-        self.output_label = QLabel("Selecione a saída:")
-        self.output_combo = QComboBox()
-        self.output_combo.addItems(["Teclado", "Joystick"])
-
         self.connect_btn = QPushButton("Conectar à Luva")
-        self.connect_btn.clicked.connect(self.connect_glove)
+        self.connect_btn.clicked.connect(self.toggle_connection)
 
         self.calibrate_btn = QPushButton("Calibrar Sensores")
         self.calibrate_btn.clicked.connect(self.open_calibration)
 
-        self.status_label = QLabel("Status: Desconectado")
-
+        self.status_label = QLabel("Status: Parado")
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
 
         layout = QVBoxLayout()
-        layout.addWidget(self.instrument_label)
-        layout.addWidget(self.instrument_combo)
-        layout.addWidget(self.output_label)
-        layout.addWidget(self.output_combo)
+        layout.addWidget(QLabel("Controle:"))
         layout.addWidget(self.connect_btn)
         layout.addWidget(self.calibrate_btn)
         layout.addWidget(self.status_label)
-        layout.addWidget(QLabel("Dados dos Sensores:"))
+        layout.addWidget(QLabel("Dados Recebidos:"))
         layout.addWidget(self.sensor_output)
 
-        central_widget = QWidget()
-        central_widget.setLayout(layout)
-        self.setCentralWidget(central_widget)
+        widget = QWidget()
+        widget.setLayout(layout)
+        self.setCentralWidget(widget)
 
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_sensor_data)
-        self.connected = False
-
-        self.gamepad = vg.VX360Gamepad() if HAS_VGAMEPAD else None
+        self.timer.timeout.connect(self.update_ui)
+        self.timer.start(100)
 
         self.setStyleSheet("""
-            QMainWindow { background-color: #111; color: white; }
-            QPushButton {
-                background-color: #222;
-                color: #FF00FF;
-                font-size: 14px;
-                padding: 8px;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #FF00FF;
-                color: black;
-            }
-            QComboBox {
-                background-color: #333;
-                color: #00FFFF;
-                padding: 4px;
-            }
-            QLabel { color: #FFFFFF; font-weight: bold; }
-            QTextEdit {
-                background-color: #000;
-                color: white;
-                font-family: monospace;
-            }
+            QMainWindow { background-color: #121212; color: #ddd; }
+            QPushButton { background-color: #333; color: #0ff; padding: 10px; border-radius: 5px; font-weight: bold;}
+            QPushButton:hover { background-color: #0ff; color: #000; }
+            QTextEdit { background-color: #000; color: #0f0; font-family: monospace; }
         """)
 
-    # ============ troca de telas ============
     def open_calibration(self):
         self.calibration_screen = CalibrationWidget(self)
         self.setCentralWidget(self.calibration_screen)
@@ -206,59 +142,76 @@ class AirBandApp(QMainWindow):
     def show_main_window(self):
         self.setCentralWidget(None)
         self.__init__()
+        self.comm.connected = True
+        self.comm.toggle_connection()
         self.show()
 
-    # ============ simulação de sensores ============
-    def generate_sensor_data(self):
-        data = {}
-        for i in range(1, 5):
-            data[f"flex_dedo{i}"] = random.randint(0, 1023)
-
-        def rand3d(a, b):
-            return (round(random.uniform(a, b), 2),
-                    round(random.uniform(a, b), 2),
-                    round(random.uniform(a, b), 2))
-
-        for s in ["magnetometro_esq", "magnetometro_dir",
-                  "acelerometro_esq", "acelerometro_dir",
-                  "giroscopio_esq", "giroscopio_dir"]:
-            data[s] = rand3d(-50, 50)
-        return data
-
-    def get_random_sensor_value(self, sensor_name):
-        if "flex" in sensor_name:
-            return random.randint(0, 1023)
-        else:
-            return random.uniform(-50, 50)
-
-    # ============ conexão com glove ============
-    def connect_glove(self):
-        if self.connected:
-            self.timer.stop()
-            self.status_label.setText("Status: Desconectado")
-            self.connect_btn.setText("Conectar à Luva")
-            self.connected = False
-        else:
-            self.status_label.setText("Status: Conectado")
+    def toggle_connection(self):
+        self.comm.toggle_connection()
+        if self.comm.connected:
             self.connect_btn.setText("Desconectar")
-            self.timer.start(1000)
-            self.connected = True
+            self.status_label.setText("Status: Ouvindo porta 8888...")
+        else:
+            self.connect_btn.setText("Conectar à Luva")
+            self.status_label.setText("Status: Parado")
 
-    def update_sensor_data(self):
-        data = self.generate_sensor_data()
-        texto = (
-            "<b><span style='color:#00FF00;'>MÃO ESQUERDA:</span></b><br>"
-            + "".join([f"<span>Dedo {i+1}: {data[f'flex_dedo{i+1}']}</span><br>" for i in range(4)])
-            + f"Magnetômetro: X={data['magnetometro_esq'][0]}, Y={data['magnetometro_esq'][1]}, Z={data['magnetometro_esq'][2]}<br>"
-            + f"Acelerômetro: X={data['acelerometro_esq'][0]}, Y={data['acelerometro_esq'][1]}, Z={data['acelerometro_esq'][2]}<br>"
-            + f"Giroscópio: X={data['giroscopio_esq'][0]}, Y={data['giroscopio_esq'][1]}, Z={data['giroscopio_esq'][2]}<br>"
-            "<hr>"
-            "<b><span style='color:#00FF00;'>MÃO DIREITA:</span></b><br>"
-            + f"Magnetômetro: X={data['magnetometro_dir'][0]}, Y={data['magnetometro_dir'][1]}, Z={data['magnetometro_dir'][2]}<br>"
-            + f"Acelerômetro: X={data['acelerometro_dir'][0]}, Y={data['acelerometro_dir'][1]}, Z={data['acelerometro_dir'][2]}<br>"
-            + f"Giroscópio: X={data['giroscopio_dir'][0]}, Y={data['giroscopio_dir'][1]}, Z={data['giroscopio_dir'][2]}<br>"
-        )
-        self.sensor_output.setHtml(texto)
+    def get_mapped_data(self):
+        """Mapeia os nomes técnicos do communication.py para os nomes da GUI."""
+        raw = self.comm.get_latest_data()
+
+        return {
+            "flex_dedo1": raw["adc_v32"],
+            "flex_dedo2": raw["adc_v33"],
+            "flex_dedo3": raw["adc_v34"],
+            "flex_dedo4": raw["adc_v35"],
+            # Tuplas (x, y, z)
+            "acelerometro_esq": (raw["acc_x"], raw["acc_y"], raw["acc_z"]),
+            "giroscopio_esq":   (raw["gyro_x"], raw["gyro_y"], raw["gyro_z"]),
+            "magnetometro_esq": (raw["mag_mx"], raw["mag_my"], raw["mag_mz"]),
+            # Dados extras já calculados
+            "acc_magnitude": raw["acc_magnitude"],
+            "gyro_magnitude": raw["gyro_magnitude"],
+
+            "acelerometro_dir": (0,0,0), 
+            "giroscopio_dir": (0,0,0),
+            "magnetometro_dir": (0,0,0)
+        }
+
+    def get_sensor_value_for_calibration(self, sensor_name):
+        """
+        Retorna o valor escalar para calibração.
+        Se for sensor 3D, usa a magnitude pré-calculada pelo Communication.
+        """
+        raw = self.comm.get_latest_data()
+
+        if "acelerometro" in sensor_name:
+            return raw["acc_magnitude"]
+        elif "giroscopio" in sensor_name:
+            return raw["gyro_magnitude"]
+        elif "magnetometro" in sensor_name:
+            # Magnetômetro geralmente não se calibra por magnitude simples dessa forma, 
+            # mas mantendo lógica consistente:
+            mx, my, mz = raw["mag_mx"], raw["mag_my"], raw["mag_mz"]
+            return math.sqrt(mx**2 + my**2 + mz**2)
+
+        # Flex sensores
+        mapping = self.get_mapped_data()
+        return float(mapping.get(sensor_name, 0.0))
+
+    def update_ui(self):
+        if not self.comm.connected: return
+
+        raw = self.comm.get_latest_data()
+
+        txt = "<b>MÃO ESQUERDA (Dados Reais):</b><br>"
+        txt += f"Flex 1: {raw['adc_v32']:.0f}<br>"
+        txt += f"Acc (XYZ): {raw['acc_x']}, {raw['acc_y']}, {raw['acc_z']}<br>"
+        txt += f"Acc Mag: <span style='color:yellow'>{raw['acc_magnitude']:.1f}</span><br>"
+        txt += f"Gyr (XYZ): {raw['gyro_x']}, {raw['gyro_y']}, {raw['gyro_z']}<br>"
+        txt += f"Gyr Mag: <span style='color:cyan'>{raw['gyro_magnitude']:.1f}</span><br>"
+
+        self.sensor_output.setHtml(txt)
+        self.status_label.setText(f"Status: {self.comm.network_status_message}")
 
 
 if __name__ == "__main__":
