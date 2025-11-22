@@ -29,13 +29,13 @@ void Gyroscope::loop(){
     // A leitura e impressão ocorrem a cada chamada desta função.
     readData();
 
-    Serial.print("AcX: "); Serial.print(AcX / 100.0);
-    Serial.print(" | AcY: "); Serial.print(AcY / 100.0);
-    Serial.print(" | AcZ: "); Serial.print(AcZ / 100.0);
-    Serial.print(" | Tmp: "); Serial.print(Tmp / 100.0);
-    Serial.print(" | GyX: "); Serial.print(GyX / 100.0);
-    Serial.print(" | GyY: "); Serial.print(GyY / 100.0);
-    Serial.print(" | GyZ: "); Serial.println(GyZ / 100.0);
+    // Serial.print("AcX: "); Serial.print(AcX / 100.0);
+    // Serial.print(" | AcY: "); Serial.print(AcY / 100.0);
+    // Serial.print(" | AcZ: "); Serial.print(AcZ / 100.0);
+    // Serial.print(" | Tmp: "); Serial.print(Tmp / 100.0);
+    // Serial.print(" | GyX: "); Serial.print(GyX / 100.0);
+    // Serial.print(" | GyY: "); Serial.print(GyY / 100.0);
+    // Serial.print(" | GyZ: "); Serial.println(GyZ / 100.0);
 }
 // ========================================================
 
