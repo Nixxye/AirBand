@@ -37,6 +37,7 @@ private:
     // Sensores
     Gyroscope* gyro;
     AnalogReader* adcReader;
+    Magnetometer* mag;
 
     unsigned long lastSendTime;
 

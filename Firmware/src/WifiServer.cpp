@@ -7,7 +7,7 @@ WifiServer::WifiServer(const char* ssid, const char* password)
 {
     // Define o IP padrão do PC conectado ao SoftAP do ESP32
     // O ESP é 192.168.4.1, o primeiro cliente recebe 192.168.4.2
-    pcIP = IPAddress(192.168, 4, 2); 
+    pcIP = IPAddress(192, 168, 4, 2);
 
     Serial.println("|WifiServer| ------- Iniciando UDP Turbo ---------");
 
