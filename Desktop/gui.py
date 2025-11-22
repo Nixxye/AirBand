@@ -175,7 +175,7 @@ class InstructionsScreen(Screen):
             <li>Na aba 'Controle', clique em 'Conectar à Luva'.</li>
             <li>Vá para a aba 'Calibração'.</li>
             <li>Clique em "Calibrar Dedo 1" e siga as instruções (Repouso, Meio, Completo).</li>
-            <li>Para "Batidas", clique em "INICIAR GRAVAÇÃO", faça o movimento, e clique "PARAR".</li>
+            <li>Para "Batidas", clique em "Batida (Giroscópio)", depois "INICIAR GRAVAÇÃO", faça o movimento, e clique "PARAR".</li>
             <li>O app irá <b>auto-detectar</b> qual sensor você usou.</li>
             <li>Os mapeamentos são salvos automaticamente.</li>
             <li>Retorne à aba 'Controle' e toque!</li>
@@ -210,8 +210,11 @@ class CalibrationScreen(Screen):
         self.current_calibration_action = None
         self.current_calibration_step = 0
         self.temp_snapshots = {}
+        
+        # --- AQUI ESTAVA O ERRO: Adicionado "Batida (Giroscópio)" na lista ---
         self.logical_actions = [
             "Dedo 1 (Indicador)", "Dedo 2 (Médio)", "Dedo 3 (Anelar)", "Dedo 4 (Mindinho)",
+            "Batida (Giroscópio)"
         ]
 
         self.is_recording_peak = False
@@ -958,5 +961,3 @@ class CameraWidget(QWidget):
         """ Garante que a câmera seja liberada ao fechar o widget. """
         self.stop_camera()
         super().closeEvent(event)
-
-# =======================================================================

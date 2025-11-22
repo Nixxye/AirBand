@@ -6,7 +6,9 @@ from PyQt5.QtWidgets import (
     QPushButton, QTextEdit, QSlider
 )
 from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QTextCursor
 
+# Importa a classe do arquivo separado
 from communication import Communication
 
 
@@ -14,39 +16,56 @@ class CalibrationWidget(QWidget):
     def __init__(self, parent):
         super().__init__()
         self.parent = parent
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("<h2>Calibração Real 🎛️</h2>"))
+        
+        # Variáveis de Estado para Calibração Complexa
+        self.calib_state = "IDLE" # IDLE, REST_WAIT, RESTING, PEAK_WAIT, PEAKING
+        self.calib_timer_count = 0
+        self.calib_sensor_target = ""
+        self.calib_rest_val = 0.0
+        self.calib_peak_val = 0.0
+        self.temp_samples = []
 
-        # Taxa de erro
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("<h2>Calibração Avançada 🎛️</h2>"))
+
+        # Slider de Ajuste
         error_layout = QHBoxLayout()
-        self.error_label = QLabel("Margem: 5%")
+        self.error_label = QLabel("Sensibilidade/Margem: 30%")
         self.error_slider = QSlider(Qt.Horizontal)
-        self.error_slider.setRange(0, 50)
-        self.error_slider.setValue(5)
-        self.error_slider.valueChanged.connect(lambda: self.error_label.setText(f"Margem: {self.error_slider.value()}%"))
+        self.error_slider.setRange(1, 99)
+        self.error_slider.setValue(30)
+        self.error_slider.valueChanged.connect(lambda: self.error_label.setText(f"Sensibilidade/Margem: {self.error_slider.value()}%"))
         error_layout.addWidget(self.error_label)
         error_layout.addWidget(self.error_slider)
         layout.addLayout(error_layout)
 
-        layout.addWidget(QLabel("<b>SENSORES DISPONÍVEIS:</b>"))
+        layout.addWidget(QLabel("<b>SENSORES:</b>"))
 
-        # Botões Flex
+        # Botões Flex (Calibração Simples)
         hbox_flex = QHBoxLayout()
         for i in range(1, 5):
             btn = QPushButton(f"Flex {i}")
-            btn.clicked.connect(lambda _, idx=i: self.calibrate(f"flex_dedo{idx}"))
+            btn.clicked.connect(lambda _, idx=i: self.calibrate_simple(f"flex_dedo{idx}"))
             hbox_flex.addWidget(btn)
         layout.addLayout(hbox_flex)
 
-        # Botões IMU
+        # Botões IMU (Calibração Complexa para Giroscópio)
         hbox_imu = QHBoxLayout()
-        for sensor in ["magnetometro_esq", "acelerometro_esq", "giroscopio_esq"]:
+        
+        # Giroscópio com fluxo especial
+        btn_gyro = QPushButton("Giroscópio (Dinâmico)")
+        btn_gyro.setStyleSheet("background-color: #440044; color: cyan;")
+        btn_gyro.clicked.connect(self.start_gyro_calibration_sequence)
+        hbox_imu.addWidget(btn_gyro)
+
+        # Outros simples
+        for sensor in ["magnetometro_esq", "acelerometro_esq"]:
             btn = QPushButton(f"{sensor.split('_')[0].title()}")
-            btn.clicked.connect(lambda _, s=sensor: self.calibrate(s))
+            btn.clicked.connect(lambda _, s=sensor: self.calibrate_simple(s))
             hbox_imu.addWidget(btn)
         layout.addLayout(hbox_imu)
 
-        layout.addWidget(QLabel("Feedback:"))
+        layout.addWidget(QLabel("Console:"))
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
         layout.addWidget(self.sensor_output)
@@ -56,58 +75,140 @@ class CalibrationWidget(QWidget):
         layout.addWidget(back_btn)
 
         self.setLayout(layout)
-
+        
+        # Timer da Interface (10Hz = 100ms)
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_display)
-        self.timer.start(200)
+        self.timer.timeout.connect(self.update_loop)
+        self.timer.start(100)
 
-    def calibrate(self, sensor_name):
+    # --- Calibração Simples (Snapshot) ---
+    def calibrate_simple(self, sensor_name):
         if not self.parent.comm.connected:
-            self.sensor_output.append("<span style='color:red'>ERRO: Conecte a luva primeiro!</span>")
+            self.log("ERRO: Conecte a luva primeiro!", "red")
             return
 
         val = self.parent.get_sensor_value_for_calibration(sensor_name)
-        taxa = self.error_slider.value() / 100.0
-        limite = val * (1 - taxa)
-
+        margem = self.error_slider.value() / 100.0
+        
+        # Para Flex, o 'trigger' geralmente é quando dobra (valor aumenta ou diminui dependendo do circuito)
+        # Aqui assumimos um limiar simples
+        limite = val * (1 - margem) 
+        
         self.parent.calibrated_values[sensor_name] = limite
+        self.log(f"<b>{sensor_name}</b> calibrado: Ref={val:.1f} | Limite={limite:.1f}")
 
-        self.sensor_output.append(
-            f"<b style='color:cyan'>{sensor_name}</b>: Ref={val:.1f} | "
-            f"Limite={limite:.1f} (Margem {self.error_slider.value()}%)"
-        )
+    # --- Calibração Dinâmica (Repouso -> Pico) ---
+    def start_gyro_calibration_sequence(self):
+        if not self.parent.comm.connected:
+            self.log("ERRO: Conecte a luva primeiro!", "red")
+            return
+            
+        self.calib_sensor_target = "giroscopio_esq"
+        self.calib_state = "REST_WAIT"
+        self.calib_timer_count = 30 # 3 segundos (30 * 100ms)
+        self.log("<b>PASSO 1:</b> Mantenha a mão IMÓVEL para calibrar o repouso...", "yellow")
 
-    def update_display(self):
+    def process_calibration_state(self):
+        if self.calib_state == "IDLE":
+            return
+
+        # Obtém magnitude atual
+        raw = self.parent.comm.get_latest_data()
+        curr_val = raw["gyro_magnitude"]
+
+        # 1. Contagem regressiva para Repouso
+        if self.calib_state == "REST_WAIT":
+            self.calib_timer_count -= 1
+            if self.calib_timer_count <= 0:
+                self.calib_state = "RESTING"
+                self.calib_timer_count = 20 # 2 segundos capturando média
+                self.temp_samples = []
+                self.log(">>> CAPTURANDO REPOUSO...", "lime")
+        
+        # 2. Capturando Repouso (Média)
+        elif self.calib_state == "RESTING":
+            self.temp_samples.append(curr_val)
+            self.calib_timer_count -= 1
+            if self.calib_timer_count <= 0:
+                self.calib_rest_val = sum(self.temp_samples) / len(self.temp_samples)
+                self.log(f"Repouso capturado: {self.calib_rest_val:.2f}", "white")
+                
+                self.calib_state = "PEAK_WAIT"
+                self.calib_timer_count = 20 # 2 segundos para preparar
+                self.log("<b>PASSO 2:</b> Prepare-se para fazer o MOVIMENTO MÁXIMO...", "yellow")
+
+        # 3. Preparando para Pico
+        elif self.calib_state == "PEAK_WAIT":
+            self.calib_timer_count -= 1
+            if self.calib_timer_count <= 0:
+                self.calib_state = "PEAKING"
+                self.calib_timer_count = 30 # 3 segundos de janela de movimento
+                self.calib_peak_val = 0.0
+                self.log(">>> MOVA AGORA!!! (Capturando Pico)", "red")
+
+        # 4. Capturando Pico (Máximo)
+        elif self.calib_state == "PEAKING":
+            if curr_val > self.calib_peak_val:
+                self.calib_peak_val = curr_val
+            
+            self.calib_timer_count -= 1
+            if self.calib_timer_count <= 0:
+                # FIM - Calcular Threshold
+                rest = self.calib_rest_val
+                peak = self.calib_peak_val
+                sensibilidade = self.error_slider.value() / 100.0
+                
+                # Fórmula: O limiar é o repouso + X% da diferença para o pico
+                threshold = rest + ((peak - rest) * sensibilidade)
+                
+                self.parent.calibrated_values[self.calib_sensor_target] = threshold
+                
+                self.log(f"<b>CALIBRAÇÃO CONCLUÍDA!</b>", "cyan")
+                self.log(f"Repouso: {rest:.1f} | Pico: {peak:.1f}", "white")
+                self.log(f"Limiar Definido: {threshold:.1f} (Sensibilidade {int(sensibilidade*100)}%)", "lime")
+                self.calib_state = "IDLE"
+
+    def update_loop(self):
+        # Processa máquina de estados
+        self.process_calibration_state()
+        
+        # Atualiza display apenas se conectado
         if not self.parent.comm.connected: return
-        data = self.parent.get_mapped_data()
-        msg = "<b>Valores em Tempo Real:</b><br>"
-        msg += f"Flex 1: {data['flex_dedo1']:.0f}<br>"
-        # Mostra magnitude para o usuário entender o que está sendo calibrado
-        acc_vec = data['acelerometro_esq']
-        acc_mag = math.sqrt(acc_vec[0]**2 + acc_vec[1]**2 + acc_vec[2]**2)
-        msg += f"Acc Mag: {acc_mag:.1f}<br>"
-        self.sensor_output.setHtml(msg)
+        
+        # Feedback visual em tempo real no rodapé (opcional)
+        # Se não estiver calibrando, mostra dados live normalmente?
+        if self.calib_state == "IDLE":
+            data = self.parent.get_mapped_data()
+            # Mostra apenas um resumo para não poluir se tiver muita coisa
+            # Ou mantém o update anterior se preferir
+            pass 
+
+    def log(self, text, color="white"):
+        self.sensor_output.append(f"<span style='color:{color}'>{text}</span>")
+        # Auto-scroll
+        self.sensor_output.moveCursor(QTextCursor.End)
 
     def go_back(self):
         self.timer.stop()
         self.parent.show_main_window()
 
 
+# ===================== MAIN APP =====================
 class AirBandApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Air Band 🤘")
+        self.setWindowTitle("Air Band 🤘 (UDP Real)")
         self.setGeometry(300, 200, 600, 700)
-
+        
         self.comm = Communication()
         self.calibrated_values = {}
 
         self.connect_btn = QPushButton("Conectar à Luva")
         self.connect_btn.clicked.connect(self.toggle_connection)
-
+        
         self.calibrate_btn = QPushButton("Calibrar Sensores")
         self.calibrate_btn.clicked.connect(self.open_calibration)
-
+        
         self.status_label = QLabel("Status: Parado")
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
@@ -141,9 +242,9 @@ class AirBandApp(QMainWindow):
 
     def show_main_window(self):
         self.setCentralWidget(None)
-        self.__init__()
-        self.comm.connected = True
-        self.comm.toggle_connection()
+        self.__init__() 
+        self.comm.connected = True 
+        self.comm.toggle_connection() 
         self.show()
 
     def toggle_connection(self):
@@ -156,63 +257,44 @@ class AirBandApp(QMainWindow):
             self.status_label.setText("Status: Parado")
 
     def get_mapped_data(self):
-        """Mapeia os nomes técnicos do communication.py para os nomes da GUI."""
         raw = self.comm.get_latest_data()
-
         return {
             "flex_dedo1": raw["adc_v32"],
             "flex_dedo2": raw["adc_v33"],
             "flex_dedo3": raw["adc_v34"],
             "flex_dedo4": raw["adc_v35"],
-            # Tuplas (x, y, z)
             "acelerometro_esq": (raw["acc_x"], raw["acc_y"], raw["acc_z"]),
             "giroscopio_esq":   (raw["gyro_x"], raw["gyro_y"], raw["gyro_z"]),
             "magnetometro_esq": (raw["mag_mx"], raw["mag_my"], raw["mag_mz"]),
-            # Dados extras já calculados
             "acc_magnitude": raw["acc_magnitude"],
             "gyro_magnitude": raw["gyro_magnitude"],
-
-            "acelerometro_dir": (0,0,0), 
-            "giroscopio_dir": (0,0,0),
-            "magnetometro_dir": (0,0,0)
         }
 
     def get_sensor_value_for_calibration(self, sensor_name):
-        """
-        Retorna o valor escalar para calibração.
-        Se for sensor 3D, usa a magnitude pré-calculada pelo Communication.
-        """
         raw = self.comm.get_latest_data()
-
-        if "acelerometro" in sensor_name:
-            return raw["acc_magnitude"]
-        elif "giroscopio" in sensor_name:
-            return raw["gyro_magnitude"]
-        elif "magnetometro" in sensor_name:
-            # Magnetômetro geralmente não se calibra por magnitude simples dessa forma, 
-            # mas mantendo lógica consistente:
-            mx, my, mz = raw["mag_mx"], raw["mag_my"], raw["mag_mz"]
-            return math.sqrt(mx**2 + my**2 + mz**2)
-
-        # Flex sensores
+        if "acelerometro" in sensor_name: return raw["acc_magnitude"]
+        elif "giroscopio" in sensor_name: return raw["gyro_magnitude"]
+        elif "magnetometro" in sensor_name: 
+            return math.sqrt(raw["mag_mx"]**2 + raw["mag_my"]**2 + raw["mag_mz"]**2)
         mapping = self.get_mapped_data()
         return float(mapping.get(sensor_name, 0.0))
 
     def update_ui(self):
         if not self.comm.connected: return
-
         raw = self.comm.get_latest_data()
-
         txt = "<b>MÃO ESQUERDA (Dados Reais):</b><br>"
         txt += f"Flex 1: {raw['adc_v32']:.0f}<br>"
-        txt += f"Acc (XYZ): {raw['acc_x']}, {raw['acc_y']}, {raw['acc_z']}<br>"
         txt += f"Acc Mag: <span style='color:yellow'>{raw['acc_magnitude']:.1f}</span><br>"
-        txt += f"Gyr (XYZ): {raw['gyro_x']}, {raw['gyro_y']}, {raw['gyro_z']}<br>"
         txt += f"Gyr Mag: <span style='color:cyan'>{raw['gyro_magnitude']:.1f}</span><br>"
+        
+        # Mostra se o gatilho está ativo baseado na calibração
+        if "giroscopio_esq" in self.calibrated_values:
+            limite = self.calibrated_values["giroscopio_esq"]
+            status = "ATIVADO!" if raw["gyro_magnitude"] > limite else "..."
+            txt += f"Trigger Gyro ({limite:.1f}): <b>{status}</b><br>"
 
         self.sensor_output.setHtml(txt)
         self.status_label.setText(f"Status: {self.comm.network_status_message}")
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
