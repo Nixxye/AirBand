@@ -159,11 +159,9 @@ class Emulator:
         Garante que todos os botões sejam liberados e o gamepad virtual seja
         desligado quando a aplicação for encerrada.
         """
-        print("\n gracefully-shutting-down.gif")
         self._reset_botoes_atuais() # Libera quaisquer botões que possam estar ativos
         if self.gamepad:
             self.gamepad.reset() # Garante que o gamepad virtual resete todos os estados
-            print("Gamepad virtual resetado.")
         print("Emulator encerrado.")
 
 
