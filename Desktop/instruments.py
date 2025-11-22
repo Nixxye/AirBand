@@ -4,24 +4,101 @@ from emulator import InputData, Emulator
 
 
 class Instrument(InputData):
-    """ Classe base para instrumentos com vetor de estado. """
+    """ Classe base genérica para instrumentos com estado. """
     def __init__(self):
-        super().__init__()
-        # Vetor de 4 posições para as "lanes" (trilhas)
-        self.lanes_vector = [0, 0, 0, 0] 
-
+        self.lanes_vector = [0, 0, 0, 0]
 
 class Drum(Instrument):
     def __init__(self):
         super().__init__()
 
-    def process_data(self, camera_data, emulator: Emulator):
-        # Exemplo simples para bateria (expandir futuramente)
-        if "Drum 1" in camera_data.get("Baterias_Ativadas", ""):
-            print("BUM! (Bumbo)")
-
+    def process_data(self, camera_data, mappings, emulator: Emulator):
+        # Implementação futura da bateria via câmera
+        pass
 
 class Guitar(Instrument):
+    def __init__(self):
+        super().__init__()
+        self.finger_actions = [
+            "Dedo 1 (Indicador)", 
+            "Dedo 2 (Médio)", 
+            "Dedo 3 (Anelar)", 
+            "Dedo 4 (Mindinho)"
+        ]
+        self.strum_action = "Batida (Giroscópio)"
+
+    def _get_magnitude(self, data):
+        return math.sqrt(data.get("ax",0)**2 + data.get("ay",0)**2 + data.get("az",0)**2)
+
+    def _get_dist(self, v1, v2):
+        return math.sqrt(
+            (v1.get("ax",0) - v2.get("ax",0))**2 +
+            (v1.get("ay",0) - v2.get("ay",0))**2 +
+            (v1.get("az",0) - v2.get("az",0))**2
+        )
+
+    def process_data(self, logical_data, mappings, emulator: Emulator):
+        """
+        Processa lógica de Dedos (Lanes) e Palhetada (Strum).
+        Chamado automaticamente pelo Worker em alta frequência.
+        """
+        
+        # --- 1. Lógica do Vetor de Lanes ---
+        new_lanes = [0, 0, 0, 0]
+        
+        for i, action in enumerate(self.finger_actions):
+            if action in mappings and action in logical_data:
+                val = logical_data[action]
+                calib = mappings[action]
+                
+                try:
+                    half = float(calib.get("half", 0))
+                    full = float(calib.get("full", 0))
+                    
+                    # Garante intervalo min/max (sensores flex podem inverter)
+                    lim_inf = min(half, full)
+                    lim_sup = max(half, full)
+                    
+                    # Ativa se estiver na zona de pressão (entre meio e completo)
+                    if lim_inf <= val <= lim_sup:
+                        new_lanes[i] = 1
+                    # Se passou do máximo (apertou muito forte), mantém ativo
+                    elif abs(val - full) < abs(val - half):
+                        new_lanes[i] = 1
+                    else:
+                        new_lanes[i] = 0
+                        
+                except (ValueError, TypeError):
+                    new_lanes[i] = 0
+
+        # Atualiza emulador apenas se houver mudança nos dedos
+        if new_lanes != self.lanes_vector:
+            self.lanes_vector = new_lanes
+            emulator.atualizar_estado(self.lanes_vector)
+
+        # --- 2. Lógica da Palhetada (Strum) ---
+        # O Emulador fornecido não possui método de Strum, 
+        # mas a lógica de detecção fica pronta aqui para expansão futura.
+        if self.strum_action in mappings and self.strum_action in logical_data:
+            current_vec = logical_data[self.strum_action]
+            calib = mappings[self.strum_action]
+            
+            try:
+                rest = calib.get("rest", {})
+                up = calib.get("up", {})
+                
+                mag_curr = self._get_magnitude(current_vec)
+                mag_rest = self._get_magnitude(rest)
+                mag_up = self._get_magnitude(up)
+                
+                # Limiar de 40% da força calibrada
+                threshold = mag_rest + (mag_up - mag_rest) * 0.4
+                
+                if mag_curr > threshold:
+                    # Detectou batida (pode adicionar lógica de direção Up/Down aqui)
+                    pass
+            except:
+                pass
     def __init__(self):
         super().__init__()
         # Mapeamento de indices para nomes das ações
