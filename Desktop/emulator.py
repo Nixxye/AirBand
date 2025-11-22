@@ -165,6 +165,15 @@ class Emulator:
         print("Emulator encerrado.")
 
 
+class InputData:
+    """ 
+    Interface base. 
+    Na nova arquitetura com Worker, ela não busca dados, 
+    apenas define o contrato para os instrumentos processarem.
+    """
+    def process_data(self, data, mappings, emulator):
+        pass
+
 """
 # --- Exemplo de Uso ---
 

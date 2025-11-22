@@ -1,68 +1,87 @@
 import math
 import json
-from emulator import Emulator
-from instruments import Guitar, Drum
-from communication import Communication
-import cv2          
-import mediapipe as mp 
-import numpy as np  
+import cv2
+import mediapipe as mp
+import numpy as np
+import sys
+
 from PyQt5.QtGui import QImage, QPixmap
-
-
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QTextEdit, QSlider,
     QCheckBox, QStackedWidget, QFormLayout,
     QScrollArea, QLineEdit, QMessageBox,
-    QGroupBox, QFrame, QTabWidget, QMainWindow
+    QGroupBox, QFrame, QTabWidget, QMainWindow, QApplication
 )
 from PyQt5.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 
+# --- Imports dos Módulos ---
+from communication import Communication
+from emulator import Emulator
+from instruments import Guitar, Drum
+from worker import InstrumentWorker  # <--- Import do Worker
+
+# =============================================================================
+# CLASSES PRINCIPAIS
+# =============================================================================
 
 class MainApplication(QMainWindow):
     """
     Classe principal da Interface (QMainWindow).
-    Monta as abas e gerencia os timers e a lógica.
+    Gerencia UI e Thread de Processamento (Worker).
     """
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Air Band 🤘")
+        self.setWindowTitle("Air Band 🤘 (Multi-Thread)")
         self.setGeometry(300, 200, 800, 700)
 
         self.sensor_mappings = {}
         self.load_mappings_from_file()
 
-        # --- Instancia a lógica ---
-        self.communication = Communication()
-        self.emulator = Emulator()
+        # --- 1. Instancia a Lógica (Shared Resources) ---
+        self.communication = Communication() # Thread de rede inicia internamente
+        self.emulator = Emulator()           # Singleton
         self.guitar = Guitar()
         self.drum = Drum()
 
-        # --- Cria QTabWidget ---
+        # --- 2. Instancia e Inicia o WORKER (Thread de Processamento) ---
+        # O worker assume o loop pesado de verificar sensores e acionar emulador
+        self.worker = InstrumentWorker(
+            self.communication, 
+            self.guitar, 
+            self.drum, 
+            self.emulator
+        )
+        self.worker.update_mappings(self.sensor_mappings) # Passa config inicial
+        self.worker.start() # Inicia loop de alta frequência (1ms delay)
+
+        # --- 3. Configuração da UI ---
         self.tabs = QTabWidget(self)
         self.tabs.setMovable(True)
 
-        # --- Instancia as abas ---
+        # Instancia as telas
         self.instructions_tab = InstructionsScreen(self)
         self.main_menu_tab = MainMenuScreen(self)
         self.calibration_tab = CalibrationScreen(self)
 
-        # --- Adiciona as abas ---
         self.tabs.addTab(self.instructions_tab, "🏠 Início")
         self.tabs.addTab(self.main_menu_tab, "⚙️ Controle")
         self.tabs.addTab(self.calibration_tab, "🎛️ Calibração")
 
         self.setCentralWidget(self.tabs)
-
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        # --- Timers Globais ---
-        self.glove_timer = QTimer(self)
-        self.glove_timer.timeout.connect(self.update_glove_data)
-        # AJUSTE: Aumentado para 10ms (100Hz) para capturar movimentos rápidos
-        self.glove_timer.start(10) 
+        # --- 4. Timers da Interface (Apenas Visualização) ---
+        
+        # Timer Visual: Atualiza apenas os textos de debug na tela.
+        # Não precisa ser 10ms (100Hz) pois o olho humano não vê, 
+        # mas mantivemos rápido (30ms / ~33FPS) para fluidez.
+        self.ui_timer = QTimer(self)
+        self.ui_timer.timeout.connect(self.update_ui_visuals)
+        self.ui_timer.start(30) 
 
+        # Timer de Conexão: Verifica status a cada 500ms
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._check_network_status)
         self.status_timer.start(500)
@@ -79,7 +98,7 @@ class MainApplication(QMainWindow):
         else:
             self.calibration_tab.stop_timer()
 
-    # ============ Funções de Controle (colam a Lógica na UI) ============
+    # ============ Funções de Controle ============
     def load_mappings_from_file(self):
         try:
             with open('sensor_mappings.json', 'r') as f:
@@ -97,58 +116,50 @@ class MainApplication(QMainWindow):
             with open('sensor_mappings.json', 'w') as f:
                 json.dump(self.sensor_mappings, f, indent=4)
                 print(f"Mapeamentos salvos em 'sensor_mappings.json'")
+            
+            # CRÍTICO: Atualiza a thread worker imediatamente com os novos mapeamentos
+            if hasattr(self, 'worker'):
+                self.worker.update_mappings(self.sensor_mappings)
+                
         except Exception as e:
             print(f"Erro ao salvar mapeamentos: {e}")
 
     def toggle_glove_connection(self):
+        # A comunicação roda em thread própria, só chamamos o método
         self.communication.toggle_connection()
 
     def _check_network_status(self):
         status = self.communication.get_status_message()
         is_connected = self.communication.connected
-        # Passa o status para a aba de controle
         self.main_menu_tab.update_connection_status(is_connected, status)
 
-    def update_glove_data(self):
-        """ Pega dados da lógica e passa para a UI e processamento """
+    def update_ui_visuals(self):
+        """ 
+        Substitui o antigo 'update_glove_data'.
+        Apenas atualiza a interface visual. O processamento lógico
+        agora ocorre dentro de 'self.worker'.
+        """
+        # Obtém cópia thread-safe dos dados apenas para mostrar na tela
         raw_data = self.communication.get_latest_data()
 
         # Passa dados para o terminal na aba "Controle"
         self.main_menu_tab.update_sensor_data(raw_data)
-
-        logical_data = {}
-        if self.communication.connected:
-            for action, mapping in self.sensor_mappings.items():
-                raw_key = mapping.get("key")
-                key_prefix = mapping.get("key_prefix")
-
-                if raw_key in raw_data:
-                    logical_data[action] = raw_data[raw_key]
-                elif key_prefix and raw_data.get(f"{key_prefix}ax") is not None:
-                    logical_data[action] = {
-                        "ax": raw_data.get(f"{key_prefix}ax", 0),
-                        "ay": raw_data.get(f"{key_prefix}ay", 0),
-                        "az": raw_data.get(f"{key_prefix}az", 0)
-                    }
-
-        if logical_data:
-            # Passa dados para processamento da Guitarra
-            self.guitar.process_data(
-                logical_data,
-                self.sensor_mappings,
-                self.emulator
-            )
+        
+        # NOTA: A lógica de processamento da guitarra foi removida daqui 
+        # e movida para worker.py para garantir performance.
 
     def closeEvent(self, event):
-        """ Garante que a câmera e o socket sejam liberados ao fechar. """
-        self.communication.connected = False
+        """ Garante encerramento limpo de todas as threads. """
+        if hasattr(self, 'worker'):
+            self.worker.stop() # Para a thread de lógica
+        self.communication.connected = False # Para a thread de rede
+        self.emulator.fechar() # Reseta controle virtual
         event.accept()
 
 
 class Screen(QWidget):
     """ 
     Classe base para todas as 'telas' da aplicação. 
-    Agora ela é uma 'Aba' (Tab).
     """
     def __init__(self, parent):
         super().__init__(parent)
@@ -310,6 +321,7 @@ class CalibrationScreen(Screen):
         return widget
 
     def start_timer(self):
+        # Mantido rápido para calibração precisa
         self.timer.start(10)
         self.update_calibration_status_labels()
 
@@ -352,7 +364,6 @@ class CalibrationScreen(Screen):
                     )
                     
                     # O "Peak Hold" captura o momento de maior diferença em relação ao repouso
-                    # Salvamos o snapshot INTEIRO (com sinais) desse momento
                     current_deviation = abs(current_mag - rest_mag)
                     if current_deviation > self.current_peak_magnitude:
                         self.current_peak_magnitude = current_deviation
@@ -599,7 +610,8 @@ class MainMenuScreen(Screen):
         config_layout.addRow(QLabel("<b>Instrumento:</b>"), self.instrument_combo)
 
         self.output_combo = QComboBox()
-        self.output_combo.addItems(["Teclado", "Joystick"])
+        self.output_combo.addItems(["Joystick", "Teclado"])
+        self.output_combo.currentTextChanged.connect(self.change_emulator_type)
         config_layout.addRow(QLabel("<b>Saída:</b>"), self.output_combo)
 
         left_column.addWidget(config_group)
@@ -677,6 +689,12 @@ class MainMenuScreen(Screen):
         main_layout.addLayout(right_column, 1)
 
         self.setLayout(main_layout)
+
+    def change_emulator_type(self, text):
+        if text == "Joystick":
+            self.main_app.emulator.set_tipo_emulacao(Emulator.TIPO_CONTROLE)
+        else:
+            self.main_app.emulator.set_tipo_emulacao(Emulator.TIPO_TECLADO)
 
     def update_sensor_data(self, raw_data):
         if not self.debug_group.isChecked():
