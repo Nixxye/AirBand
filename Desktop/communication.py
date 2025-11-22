@@ -1,95 +1,103 @@
 import threading
 import socket
+import struct
 import time
-import json
-
 
 class Communication:
     """
-    Gerencia a conexão REAL com a luva (ESP32) via Wi-Fi (TCP Socket).
+    Gerencia a recepção de dados via UDP (Alta Performance).
+    Decodifica structs binárias C++ diretamente.
     """
 
-    ESP_HOST = '192.168.4.1'
-    ESP_PORT = 8888
+    # Porta deve ser a mesma definida no WifiServer.hpp
+    UDP_PORT = 8888
+    # Escuta em todos os IPs da máquina (0.0.0.0)
+    LISTEN_IP = "0.0.0.0"
+
+    # Formato da Struct (Deve bater EXATAMENTE com o C++)
+    # < = Little Endian
+    # h = int16 (2 bytes) | i = int32 (4 bytes) | f = float (4 bytes) | I = uint32 (4 bytes)
+    # Estrutura: 6 shorts (acc/gyro) + 3 ints (mag) + 1 float (head) + 4 floats (adc) + 1 uint (time)
+    STRUCT_FORMAT = "<hhhhhhiiifffffI"
+    PACKET_SIZE = struct.calcsize(STRUCT_FORMAT)
 
     def __init__(self):
         self.connected = False
         self.sock = None
         self.receiver_thread = None
         self.data_lock = threading.Lock()
-        self.network_status_message = "Desconectado"
+        self.network_status_message = "Parado"
         self.last_sensor_data = {}
 
     def toggle_connection(self):
+        """Liga ou desliga a escuta UDP."""
         if self.connected:
             self.connected = False
-            if self.receiver_thread:
-                self.receiver_thread.join() 
+            # Fecha o socket para forçar a thread a sair do bloqueio recvfrom
             if self.sock:
                 self.sock.close()
-            self.network_status_message = "Desconectado"
+            if self.receiver_thread:
+                self.receiver_thread.join()
+            self.network_status_message = "Parado"
         else:
             self.connected = True
-            self.network_status_message = "Conectando..."
+            self.network_status_message = "Iniciando UDP..."
             self.receiver_thread = threading.Thread(target=self._receive_loop, daemon=True)
             self.receiver_thread.start()
 
     def _receive_loop(self):
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5.0)
-            print(f"Tentando conectar a {self.ESP_HOST}:{self.ESP_PORT}...")
-            self.sock.connect((self.ESP_HOST, self.ESP_PORT))
-            self.sock.settimeout(1.0)
-            self.network_status_message = "Conectado"
-            print("Conectado à ESP32!")
-            buffer = ""
+            # Configura Socket UDP
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # Permite reutilizar a porta caso reinicie o app rápido
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+            # Abre a porta e espera dados
+            self.sock.bind((self.LISTEN_IP, self.UDP_PORT))
+
+            self.network_status_message = f"Ouvindo na porta {self.UDP_PORT}"
+            print(f"UDP Server iniciado em {self.LISTEN_IP}:{self.UDP_PORT}")
+
             while self.connected:
                 try:
-                    data = self.sock.recv(1024)
-                    if not data:
-                        print("Servidor (ESP32) fechou a conexão.")
-                        break
-                    buffer += data.decode('utf-8')
-                    while '\n' in buffer:
-                        line, buffer = buffer.split('\n', 1)
-                        self._parse_data(line)
-                except socket.timeout:
-                    continue
+                    # Recebe dados
+                    data, addr = self.sock.recvfrom(1024)
+
+                    if len(data) == self.PACKET_SIZE:
+                        # Desempacota os bytes
+                        values = struct.unpack(self.STRUCT_FORMAT, data)
+
+                        # Reconstrói o dicionário para compatibilidade com sua UI
+                        new_data = {
+                            "gyro_ax": values[0], "gyro_ay": values[1], "gyro_az": values[2],
+                            "gyro_gx": values[3], "gyro_gy": values[4], "gyro_gz": values[5],
+                            "mag_mx":  values[6], "mag_my":  values[7], "mag_mz":  values[8],
+                            "mag_heading": values[9],
+                            "adc_v32": values[10], "adc_v33": values[11],
+                            "adc_v34": values[12], "adc_v35": values[13],
+                            "timestamp": values[14]
+                        }
+
+                        with self.data_lock:
+                            self.last_sensor_data = new_data
+                            # Atualiza status com IP da ESP
+                            self.network_status_message = f"Recebendo de {addr[0]}"
+                    else:
+                        print(f"Pacote tamanho incorreto: {len(data)} vs {self.PACKET_SIZE}")
+
+                except OSError:
+                    break
                 except Exception as e:
-                    print(f"Erro no loop de recebimento: {e}")
-                    time.sleep(0.5)
-        except socket.error as e:
-            print(f"Falha na conexão com a ESP32: {e}")
-            print("Verifique se o PC está no Wi-Fi 'ALuvaQueTePariu'.")
-            self.network_status_message = f"Falha: {e}"
+                    print(f"Erro no loop UDP: {e}")
+
+        except Exception as e:
+            self.network_status_message = f"Erro Bind: {e}"
+            print(f"Falha ao iniciar servidor UDP: {e}")
         finally:
             if self.sock:
                 self.sock.close()
             self.connected = False
-            if "Conectado" in self.network_status_message:
-                self.network_status_message = "Desconectado (servidor fechou)"
-            print("Thread de rede finalizada.")
-
-    def _parse_data(self, line):
-        line = line.strip()
-        if not line:
-            return
-        try:
-            json_data = json.loads(line)
-            flattened_data = {}
-            for main_key, value_dict in json_data.items():
-                if isinstance(value_dict, dict):
-                    for sub_key, sub_value in value_dict.items():
-                        flattened_data[f"{main_key}_{sub_key}"] = sub_value
-                else:
-                    flattened_data[main_key] = value_dict
-            with self.data_lock:
-                self.last_sensor_data = flattened_data
-        except json.JSONDecodeError:
-            print(f"Dado recebido mal formatado (não é JSON): '{line}'")
-        except Exception as e:
-            print(f"Erro ao decodificar dados: {e}")
+            print("Thread UDP finalizada.")
 
     def get_latest_data(self):
         with self.data_lock:
@@ -97,7 +105,7 @@ class Communication:
 
     def get_live_sensor_value(self, sensor_key):
         with self.data_lock:
-            return self.last_sensor_data.get(sensor_key, 0.0) 
+            return self.last_sensor_data.get(sensor_key, 0.0)
 
     def get_status_message(self):
         return self.network_status_message

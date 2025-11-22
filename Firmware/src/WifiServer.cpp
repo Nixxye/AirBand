@@ -1,46 +1,40 @@
-#include "../include/WifiServer.hpp"
-
-// Define a porta do servidor
-#define TCP_PORT 8888
+#include "WifiServer.hpp"
 
 WifiServer* WifiServer::instance = nullptr;
 
-// Construtor: Inicia o Wi-Fi e o Servidor
 WifiServer::WifiServer(const char* ssid, const char* password) 
     : ap_ssid(ssid), ap_password(password), lastSendTime(0) 
 {
-    Serial.println("|WifiServer| ------- Iniciando Servidor Wi-Fi ---------");
+    // Define o IP padrão do PC conectado ao SoftAP do ESP32
+    // O ESP é 192.168.4.1, o primeiro cliente recebe 192.168.4.2
+    pcIP = IPAddress(192.168, 4, 2); 
 
-    // Obtém as instâncias dos sensores (assume que já foram inicializados)
+    Serial.println("|WifiServer| ------- Iniciando UDP Turbo ---------");
+
+    // Inicializa Sensores
     gyro = Gyroscope::Init_Gyroscope();
     mag = Magnetometer::Init_Magnetometer();
     adcReader = AnalogReader::Init_AnalogReader();
-    
-    // Inicia o servidor TCP na porta definida
-    server = new WiFiServer(TCP_PORT); 
 
-    // Inicia o Access Point
-    Serial.print("|WifiServer| Abrindo Access Point: ");
-    Serial.println(ap_ssid);
+    // 1. Configura Wi-Fi AP
+    WiFi.mode(WIFI_AP);
     
-    // Configura e inicia o AP
+    // 2. CRUCIAL: Desativa Power Save (Salva ~100ms de latência)
+    WiFi.setSleep(false); 
+    
     WiFi.softAP(ap_ssid, ap_password);
     
-    IPAddress myIP = WiFi.softAPIP();
-    Serial.print("|WifiServer| IP do Servidor (AP): ");
-    Serial.println(myIP); // O IP padrão é 192.168.4.1
-    
-    server->begin();
-    Serial.print("|WifiServer| Servidor TCP iniciado na porta ");
-    Serial.println(TCP_PORT);
-    Serial.println("|WifiServer| Conecte-se a esta rede e acesse 192.168.4.1");
+    Serial.print("|WifiServer| AP Iniciado. IP: ");
+    Serial.println(WiFi.softAPIP());
+
+    // 3. Inicia escuta UDP (caso precise receber comandos do PC depois)
+    udp.begin(UDP_PORT);
 }
 
 WifiServer::~WifiServer() {
-    delete server;
+    // Destrutor
 }
 
-// Método Singleton Init
 WifiServer* WifiServer::Init_WifiServer(const char* ssid, const char* password) {
     if (instance == nullptr) {
         instance = new WifiServer(ssid, password);
@@ -48,92 +42,46 @@ WifiServer* WifiServer::Init_WifiServer(const char* ssid, const char* password) 
     return instance;
 }
 
-/**
- * @brief Verifica se um novo cliente (PC) se conectou.
- */
-void WifiServer::handleNewClient() {
-    // Verifica se há um novo cliente
-    if (server->hasClient()) {
-        // Se já tínhamos um cliente, desconecta ele primeiro
-        if (client && client.connected()) {
-            client.stop();
-            Serial.println("|WifiServer| Cliente antigo desconectado.");
-        }
-        
-        // Aceita a nova conexão
-        client = server->available();
-        Serial.println("|WifiServer| Novo cliente conectado!");
-    }
-}
-
-/**
- * @brief Envia os dados de todos os sensores para o cliente conectado.
- */
 void WifiServer::sendDataToClient() {
-    // Se o cliente estiver conectado
-    if (client && client.connected()) {
-        
-        // E se o tempo de intervalo (100ms) já passou
-        unsigned long now = millis();
-        if (now - lastSendTime >= sendInterval) {
-            lastSendTime = now;
-            
-            // 1. Coletar dados do Giroscópio
-            int16_t ax_raw, ay_raw, az_raw, tmp_raw, gx_raw, gy_raw, gz_raw;
-            gyro->getData(&ax_raw, &ay_raw, &az_raw, &tmp_raw, &gx_raw, &gy_raw, &gz_raw);
-            
-            // 2. Coletar dados do Magnetômetro
-            int mx_raw, my_raw, mz_raw;
-            float heading;
-            String bearing;
-            mag->getData(&mx_raw, &my_raw, &mz_raw, &heading, bearing);
+    unsigned long now = millis();
 
-            // 3. Coletar dados do ADC
-            float v32, v33, v34, v35;
-            adcReader->getData(&v32, &v33, &v34, &v35);
+    // Envio constante (Time-Driven, não Event-Driven)
+    if (now - lastSendTime >= SEND_INTERVAL_MS) {
+        lastSendTime = now;
 
-            // 4. Montar a string JSON
-            String json = "{";
+        // Verifica se tem alguém conectado no Wi-Fi para não falar sozinho
+        if (WiFi.softAPgetStationNum() > 0) {
             
-            // Dados do Giroscópio (convertendo de volta para float)
-            json += "\"gyro\":{";
-            json += "\"ax\":"; json += (ax_raw / 100.0);
-            json += ",\"ay\":"; json += (ay_raw / 100.0);
-            json += ",\"az\":"; json += (az_raw / 100.0);
-            json += ",\"gx\":"; json += (gx_raw / 100.0);
-            json += ",\"gy\":"; json += (gy_raw / 100.0);
-            json += ",\"gz\":"; json += (gz_raw / 100.0);
-            json += "},"; // <-- **AJUSTE: Adicionada vírgula**
-            
-            // Dados do Magnetômetro
-            json += "\"mag\":{";
-            json += "\"mx\":"; json += mx_raw;
-            json += ",\"my\":"; json += my_raw;
-            json += ",\"mz\":"; json += mz_raw;
-            json += ",\"heading\":"; json += heading;
-            json += ",\"bearing\":\""; json += bearing; json += "\"";
-            json += "},"; // <-- **AJUSTE: Adicionada vírgula**
-            
-            // Dados do ADC
-            json += "\"adc\":{";
-            json += "\"v32\":"; json += v32;
-            json += ",\"v33\":"; json += v33;
-            json += ",\"v34\":"; json += v34;
-            json += ",\"v35\":"; json += v35;
-            json += "}";
-            
-            json += "}\n"; // O '\n' (newline) é importante
+            SensorPacket packet;
 
-            // 5. Enviar para o cliente
-            client.print(json);
+            // --- Preenchimento Rápido da Struct ---
+            // Variável temporária para temperatura (se não for usar)
+            int16_t temp_trash; 
+            
+            // Giroscópio/Acelerômetro
+            gyro->getData(&packet.ax, &packet.ay, &packet.az, &temp_trash, &packet.gx, &packet.gy, &packet.gz);
+            
+            // Magnetômetro (Convertendo pointers para o tipo correto se necessário)
+            String bearing_trash; // Ignoramos strings para performance
+            // Assumindo aqui que mx, my, mz são ints
+            mag->getData((int*)&packet.mx, (int*)&packet.my, (int*)&packet.mz, &packet.heading, bearing_trash);
+
+            // ADC
+            adcReader->getData(&packet.v32, &packet.v33, &packet.v34, &packet.v35);
+
+            // Timestamp (para calcular latência no PC)
+            packet.timestamp = now;
+
+            // --- Envio UDP ---
+            // beginPacket prepara o cabeçalho
+            udp.beginPacket(pcIP, UDP_PORT);
+            // write envia os bytes brutos da memória
+            udp.write((const uint8_t*)&packet, sizeof(SensorPacket));
+            udp.endPacket(); 
         }
     }
 }
 
-/**
- * @brief Loop principal da classe.
- */
 void WifiServer::loop() {
-    handleNewClient();  // Verifica se um novo PC se conectou
-    sendDataToClient(); // Envia dados para o PC conectado (se houver)
+    sendDataToClient();
 }

@@ -1,56 +1,54 @@
 #ifndef WIFISERVER_HPP
 #define WIFISERVER_HPP
 
-#include "Arduino.h"
 #include <WiFi.h>
-#include <WiFiClient.h>
+#include <WiFiUdp.h>
+#include "Gyroscope.hpp"
+#include "Magnetometer.hpp"
+#include "AnalogReader.hpp"
 
-// Inclui os cabeçalhos das classes de sensores para obter seus dados
-#include "../include/Gyroscope.hpp"
-#include "../include/Magnetometer.hpp"
-#include "../include/AnalogReader.hpp"
+// Configuração
+#define UDP_PORT 8888
+#define SEND_INTERVAL_MS 15
+
+#pragma pack(push, 1)
+struct SensorPacket {
+    int16_t ax, ay, az;      // Acelerômetro
+    int16_t gx, gy, gz;      // Giroscópio
+    int32_t mx, my, mz;      // Magnetômetro (int32 para garantir compatibilidade)
+    float heading;           // Heading
+    float v32, v33, v34, v35;// Leituras ADC
+    uint32_t timestamp;      // Tempo do pacote (bom para debug de latência)
+};
+#pragma pack(pop)
+// ----------------------------------
 
 class WifiServer {
-public:
-    /**
-     * @brief Obtém a instância Singleton e inicia o Servidor AP.
-     * @param ssid O nome da rede Wi-Fi que a ESP32 criará.
-     * @param password A senha para essa rede.
-     */
-    static WifiServer* Init_WifiServer(const char* ssid, const char* password);
-
-    /**
-     * @brief Loop principal. Gerencia conexões de clientes e envia dados.
-     */
-    void loop();
-
 private:
-    // Construtor privado (Singleton)
-    WifiServer(const char* ssid, const char* password);
-    ~WifiServer();
-
     static WifiServer* instance;
-
-    // Funções internas
-    void handleNewClient();
-    void sendDataToClient();
-
-    // Objetos do Servidor e Cliente
-    WiFiServer* server; // Ponteiro para o servidor TCP
-    WiFiClient client;  // O PC cliente conectado
-
-    // Ponteiros para as outras classes (para obter dados)
-    Gyroscope* gyro;
-    Magnetometer* mag;
-    AnalogReader* adcReader;
-
-    // Controle de tempo para envio
-    unsigned long lastSendTime;
-    const long sendInterval = 100; // Envia dados 10x por segundo (100ms)
-
-    // Credenciais do AP
+    
+    // Objetos Wi-Fi
+    WiFiUDP udp;
     const char* ap_ssid;
     const char* ap_password;
+    
+    IPAddress pcIP; 
+
+    // Sensores
+    Gyroscope* gyro;
+    AnalogReader* adcReader;
+
+    unsigned long lastSendTime;
+
+    // Construtor privado (Singleton)
+    WifiServer(const char* ssid, const char* password);
+
+public:
+    ~WifiServer();
+    static WifiServer* Init_WifiServer(const char* ssid, const char* password);
+    
+    void loop();
+    void sendDataToClient();
 };
 
-#endif // WIFISERVER_HPP
+#endif

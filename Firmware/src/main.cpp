@@ -3,7 +3,6 @@
 #include "Magnetometer.hpp"
 #include "AnalogReader.hpp"
 #include "WifiServer.hpp"
-#include "ISR.hpp"
 
 Gyroscope* gyro;
 Magnetometer* mag;
@@ -15,22 +14,24 @@ WifiServer* wifi;
 
 void setup() {
     Serial.begin(115200);
+    delay(100);
     Serial.println("| MAIN | ---------- Iniciando setup --------");
 
     gyro = Gyroscope::Init_Gyroscope(); 
     mag = Magnetometer::Init_Magnetometer();
     adcReader = AnalogReader::Init_AnalogReader();
+
     wifi = WifiServer::Init_WifiServer(WIFI_SSID, WIFI_PASSWORD);
 
-    // Init_ISR();
-    vTaskDelay(10);
+    Serial.println("| MAIN | Setup concluído.");
 }
 
 void loop() {
     gyro->loop();
     // mag->loop();
     adcReader->loop();
+
     wifi->loop();
 
-    vTaskDelay(1);
+    vTaskDelay(1); 
 }
