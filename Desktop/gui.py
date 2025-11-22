@@ -25,7 +25,6 @@ class MainApplication(QMainWindow):
     Monta as abas e gerencia os timers e a lógica.
     """
 
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Air Band 🤘")
@@ -61,7 +60,8 @@ class MainApplication(QMainWindow):
         # --- Timers Globais ---
         self.glove_timer = QTimer(self)
         self.glove_timer.timeout.connect(self.update_glove_data)
-        self.glove_timer.start(100) # Roda 10x/seg
+        # AJUSTE: Aumentado para 10ms (100Hz) para capturar movimentos rápidos
+        self.glove_timer.start(10) 
 
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._check_network_status)
@@ -174,10 +174,9 @@ class InstructionsScreen(Screen):
             <li><b>Conecte seu PC ao Wi-Fi da luva (SSID: ALuvaQueTePariu).</b></li>
             <li>Na aba 'Controle', clique em 'Conectar à Luva'.</li>
             <li>Vá para a aba 'Calibração'.</li>
-            <li>Clique em "Calibrar Dedo 1" e siga as instruções (Repouso, Meio, Completo).</li>
-            <li>Para "Batidas", clique em "Batida (Giroscópio)", depois "INICIAR GRAVAÇÃO", faça o movimento, e clique "PARAR".</li>
-            <li>O app irá <b>auto-detectar</b> qual sensor você usou.</li>
-            <li>Os mapeamentos são salvos automaticamente.</li>
+            <li>Clique em "Calibrar Dedo 1" e siga as instruções.</li>
+            <li>Para "Batidas", clique em "Batida (Giroscópio)". Você gravará: Repouso, Batida p/ Cima e Batida p/ Baixo.</li>
+            <li>O app irá <b>auto-detectar</b> qual eixo do giroscópio usar.</li>
             <li>Retorne à aba 'Controle' e toque!</li>
         </ol>
 
@@ -211,7 +210,6 @@ class CalibrationScreen(Screen):
         self.current_calibration_step = 0
         self.temp_snapshots = {}
         
-        # --- AQUI ESTAVA O ERRO: Adicionado "Batida (Giroscópio)" na lista ---
         self.logical_actions = [
             "Dedo 1 (Indicador)", "Dedo 2 (Médio)", "Dedo 3 (Anelar)", "Dedo 4 (Mindinho)",
             "Batida (Giroscópio)"
@@ -312,7 +310,7 @@ class CalibrationScreen(Screen):
         return widget
 
     def start_timer(self):
-        self.timer.start(100)
+        self.timer.start(10)
         self.update_calibration_status_labels()
 
     def stop_timer(self):
@@ -332,16 +330,16 @@ class CalibrationScreen(Screen):
                 texto += f"<span style='color:#00FFFF;'>{key}:</span> {value}\n"
         self.sensor_output.setHtml(texto)
 
+        # LÓGICA DE CAPTURA DO PICO (BATIDA - CIMA ou BAIXO)
         if self.is_recording_peak:
             rest_data = self.temp_snapshots.get("rest", {})
             if not rest_data:
-                print("Erro: Gravação de pico iniciada sem dados de repouso.")
-                self.is_recording_peak = False
                 return
 
             sensor_prefixes = ["gyro_"]
             for prefix in sensor_prefixes:
                 try:
+                    # Calcula a magnitude vetorial (intensidade absoluta)
                     current_mag = math.sqrt(
                         float(raw_data.get(f"{prefix}ax", 0))**2 +
                         float(raw_data.get(f"{prefix}ay", 0))**2 +
@@ -352,8 +350,10 @@ class CalibrationScreen(Screen):
                         float(rest_data.get(f"{prefix}ay", 0))**2 +
                         float(rest_data.get(f"{prefix}az", 0))**2
                     )
+                    
+                    # O "Peak Hold" captura o momento de maior diferença em relação ao repouso
+                    # Salvamos o snapshot INTEIRO (com sinais) desse momento
                     current_deviation = abs(current_mag - rest_mag)
-
                     if current_deviation > self.current_peak_magnitude:
                         self.current_peak_magnitude = current_deviation
                         self.current_peak_snapshot = raw_data.copy()
@@ -388,7 +388,7 @@ class CalibrationScreen(Screen):
 
         if "Dedo" in action:
             if step == 1:
-                self.wizard_instruction.setText("1/3: Mantenha o dedo em <b>REPOUSO</b> (solto) e clique em 'Capturar'.")
+                self.wizard_instruction.setText("1/3: Mantenha o dedo em <b>REPOUSO</b> e clique em 'Capturar'.")
                 self.wizard_capture_btn.setText("Capturar Repouso")
             if step == 2:
                 self.wizard_instruction.setText("2/3: Mantenha o dedo <b>MEIO PRESSIONADO</b> e clique em 'Capturar'.")
@@ -399,13 +399,19 @@ class CalibrationScreen(Screen):
 
         elif "Batida" in action:
             if step == 1:
-                self.wizard_instruction.setText("1/2: Mantenha a mão em <b>REPOUSO</b> e clique em 'Capturar Repouso'.")
+                self.wizard_instruction.setText("1/3: Mão em <b>REPOUSO</b> (Parada).\nClique 'Capturar' para definir o zero.")
                 self.wizard_capture_btn.setText("Capturar Repouso")
-            if step == 2:
-                self.wizard_instruction.setText("2/2: Prepare-se para a batida.\n\nClique em 'INICIAR' para começar a gravar.")
-                self.wizard_capture_btn.setText("INICIAR GRAVAÇÃO")
-            if step == 3:
-                self.wizard_instruction.setText("<b>GRAVANDO...</b>\n\nFaça o movimento de batida (ex: palhetada) uma ou mais vezes.\n\nClique 'PARAR' quando terminar.")
+            elif step == 2:
+                self.wizard_instruction.setText("2/3: Preparar <b>BATIDA PARA CIMA</b>.\nClique INICIAR, faça o movimento forte para CIMA, e clique PARAR.")
+                self.wizard_capture_btn.setText("INICIAR GRAVAÇÃO (CIMA)")
+            elif step == 3:
+                self.wizard_instruction.setText("<b>GRAVANDO CIMA...</b>\n\nFaça a batida PARA CIMA!\nClique PARAR logo após o movimento.")
+                self.wizard_capture_btn.setText("PARAR GRAVAÇÃO")
+            elif step == 4:
+                self.wizard_instruction.setText("3/3: Preparar <b>BATIDA PARA BAIXO</b>.\nClique INICIAR, faça o movimento forte para BAIXO, e clique PARAR.")
+                self.wizard_capture_btn.setText("INICIAR GRAVAÇÃO (BAIXO)")
+            elif step == 5:
+                self.wizard_instruction.setText("<b>GRAVANDO BAIXO...</b>\n\nFaça a batida PARA BAIXO!\nClique PARAR logo após o movimento.")
                 self.wizard_capture_btn.setText("PARAR GRAVAÇÃO")
 
     def process_wizard_step(self):
@@ -414,7 +420,7 @@ class CalibrationScreen(Screen):
         snapshot = self.main_app.communication.get_latest_data()
 
         if not snapshot and step == 1:
-            QMessageBox.warning(self, "Erro", "Luva desconectada no meio da calibração.")
+            QMessageBox.warning(self, "Erro", "Luva desconectada.")
             self.cancel_wizard()
             return
 
@@ -425,25 +431,36 @@ class CalibrationScreen(Screen):
                 self.temp_snapshots["full"] = snapshot
                 self.finish_finger_calibration()
                 return
+            self.current_calibration_step += 1
 
         elif "Batida" in action:
-            if step == 1:
+            if step == 1: # Captura Repouso
                 self.temp_snapshots["rest"] = snapshot
-                self.current_peak_snapshot = snapshot.copy() 
                 self.current_calibration_step = 2
-            elif step == 2:
+
+            elif step == 2: # Iniciar Rec Cima
                 self.current_peak_snapshot = self.temp_snapshots["rest"].copy()
                 self.current_peak_magnitude = -1.0
                 self.is_recording_peak = True
                 self.current_calibration_step = 3
-            elif step == 3:
+
+            elif step == 3: # Parar Rec Cima
                 self.is_recording_peak = False
-                self.temp_snapshots["peak"] = self.current_peak_snapshot
-                self.finish_strum_calibration() 
+                self.temp_snapshots["up"] = self.current_peak_snapshot.copy()
+                self.current_calibration_step = 4
+
+            elif step == 4: # Iniciar Rec Baixo
+                self.current_peak_snapshot = self.temp_snapshots["rest"].copy()
+                self.current_peak_magnitude = -1.0
+                self.is_recording_peak = True
+                self.current_calibration_step = 5
+
+            elif step == 5: # Parar Rec Baixo
+                self.is_recording_peak = False
+                self.temp_snapshots["down"] = self.current_peak_snapshot.copy()
+                self.finish_strum_calibration()
                 return
 
-        if self.current_calibration_step < 3:
-            self.current_calibration_step += 1
         self.update_wizard_ui()
 
     def _find_best_sensor(self, snap_a, snap_b, sensor_prefix_filter):
@@ -463,20 +480,21 @@ class CalibrationScreen(Screen):
                 detected_key = key
         return detected_key
 
-    def _find_best_sensor_group(self, snap_a, snap_b, sensor_prefix_filter):
+    def _find_best_sensor_group(self, snap_rest, snap_peak, sensor_prefix_filter):
+        """ Encontra o prefixo (ex: gyro_) que teve maior magnitude de variação """
         max_delta_mag = -1
         detected_prefix = None
         for prefix in sensor_prefix_filter:
             try:
                 mag_a = math.sqrt(
-                    float(snap_a.get(f"{prefix}ax", 0))**2 +
-                    float(snap_a.get(f"{prefix}ay", 0))**2 +
-                    float(snap_a.get(f"{prefix}az", 0))**2
+                    float(snap_rest.get(f"{prefix}ax", 0))**2 +
+                    float(snap_rest.get(f"{prefix}ay", 0))**2 +
+                    float(snap_rest.get(f"{prefix}az", 0))**2
                 )
                 mag_b = math.sqrt(
-                    float(snap_b.get(f"{prefix}ax", 0))**2 +
-                    float(snap_b.get(f"{prefix}ay", 0))**2 +
-                    float(snap_b.get(f"{prefix}az", 0))**2
+                    float(snap_peak.get(f"{prefix}ax", 0))**2 +
+                    float(snap_peak.get(f"{prefix}ay", 0))**2 +
+                    float(snap_peak.get(f"{prefix}az", 0))**2
                 )
                 delta_mag = abs(mag_b - mag_a)
                 if delta_mag > max_delta_mag:
@@ -502,19 +520,23 @@ class CalibrationScreen(Screen):
             }
             self.main_app.sensor_mappings[action] = mapping
             self.main_app.save_mappings_to_file()
-            QMessageBox.information(self, "Sucesso", f"Calibração para '{action}' salva!\nSensor detectado: {detected_key}")
+            QMessageBox.information(self, "Sucesso", f"Calibração para '{action}' salva!\nSensor: {detected_key}")
         else:
-            QMessageBox.warning(self, "Erro", "Nenhuma variação de sensor ADC detectada. Tente novamente.")
+            QMessageBox.warning(self, "Erro", "Nenhuma variação detectada.")
         self.cancel_wizard()
 
     def finish_strum_calibration(self):
         action = self.current_calibration_action
+        
+        # 1. Detectar melhor grupo de sensores usando a Batida Cima (maior esforço geralmente)
         detected_prefix = self._find_best_sensor_group(
             self.temp_snapshots["rest"], 
-            self.temp_snapshots["peak"],
+            self.temp_snapshots["up"],
             sensor_prefix_filter=["gyro_"] 
         )
+        
         if detected_prefix:
+            # 2. Salvar dados vetoriais de Cima e Baixo
             mapping = {
                 "key_prefix": detected_prefix,
                 "rest": {
@@ -522,17 +544,25 @@ class CalibrationScreen(Screen):
                     "ay": self.temp_snapshots["rest"].get(f"{detected_prefix}ay", 0),
                     "az": self.temp_snapshots["rest"].get(f"{detected_prefix}az", 0)
                 },
-                "peak": {
-                    "ax": self.temp_snapshots["peak"].get(f"{detected_prefix}ax", 0),
-                    "ay": self.temp_snapshots["peak"].get(f"{detected_prefix}ay", 0),
-                    "az": self.temp_snapshots["peak"].get(f"{detected_prefix}az", 0)
+                "up": {
+                    "ax": self.temp_snapshots["up"].get(f"{detected_prefix}ax", 0),
+                    "ay": self.temp_snapshots["up"].get(f"{detected_prefix}ay", 0),
+                    "az": self.temp_snapshots["up"].get(f"{detected_prefix}az", 0)
+                },
+                "down": {
+                    "ax": self.temp_snapshots["down"].get(f"{detected_prefix}ax", 0),
+                    "ay": self.temp_snapshots["down"].get(f"{detected_prefix}ay", 0),
+                    "az": self.temp_snapshots["down"].get(f"{detected_prefix}az", 0)
                 }
             }
             self.main_app.sensor_mappings[action] = mapping
             self.main_app.save_mappings_to_file()
-            QMessageBox.information(self, "Sucesso", f"Calibração para '{action}' salva!\nSensor detectado: {detected_prefix} (Aceleração)")
+            QMessageBox.information(self, "Sucesso", 
+                f"Calibração de Batida Salva!\n"
+                f"Repouso, Cima e Baixo capturados no sensor {detected_prefix}")
         else:
-            QMessageBox.warning(self, "Erro", "Nenhuma variação de sensor de Aceleração detectada. Tente novamente.")
+            QMessageBox.warning(self, "Erro", "Movimento insuficiente detectado.")
+        
         self.cancel_wizard()
 
     def cancel_wizard(self):
