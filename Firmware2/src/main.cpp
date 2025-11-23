@@ -1,15 +1,18 @@
+#include <Arduino.h>
 #include <esp_now.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <esp_wifi.h> // <--- NECESSÁRIO para mudar o canal
 #include "Gyroscope.hpp"
-#include <esp_wifi.h>
 
 // --- CONFIGURAÇÃO ---
-// MAC Address da ESP32 MESTRA
+// MAC Address da Mestra (Modo AP = MAC Base + 1)
+// Base: 6C:C8:40:8B:40:D0 -> AP: ...D1
 uint8_t broadcastAddress[] = {0x6C, 0xC8, 0x40, 0x8B, 0x40, 0xD1}; 
+
 #define WIFI_CHANNEL 1
 
-// Estrutura de envio (Apenas dados do Slave)
+// Estrutura de envio (Deve dar match com a estrutura de recepção na Mestra)
 typedef struct struct_message {
   int16_t gx;
   int16_t gy;
@@ -20,56 +23,65 @@ struct_message myData;
 esp_now_peer_info_t peerInfo;
 Gyroscope* gyro;
 
+// Callback de confirmação de envio
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  // Serial.print("\r\nStatus do Envio: ");
-  // if (status == ESP_NOW_SEND_SUCCESS) {
-  //   Serial.println("Entregue com Sucesso! (Mestra confirmou)");
-  // } else {
-  //   Serial.println("FALHA na entrega (Mestra desligada ou longe?)");
-  // }
+  // Opcional: Descomente para debug, mas pode poluir o serial em alta velocidade
+  // Serial.print("Status: ");
+  // Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FALHA");
 }
 
 void setup() {
   Serial.begin(115200);
   
-  // 1. Inicializa Sensor
+  // 1. Inicializa Sensor (Sua implementação Singleton)
   gyro = Gyroscope::Init_Gyroscope();
 
   // 2. Configura Wi-Fi em modo Station
   WiFi.mode(WIFI_STA);
   
-  // TRUQUE: O ESP-NOW exige que o canal seja o mesmo do Receiver (AP da Mestra)
-  // No modo STA, o esp tenta escanear. Vamos forçar o canal.
+  // 3. Força o canal para coincidir com a Mestra (Canal 1)
+  // Isso resolve o problema de as placas não se encontrarem
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
   esp_wifi_set_promiscuous(false);
 
-  // 3. Inicia ESP-NOW
+  // 4. Inicia ESP-NOW
   if (esp_now_init() != ESP_OK) {
     Serial.println("Erro ao iniciar ESP-NOW");
     return;
   }
   esp_now_register_send_cb(OnDataSent);
 
-  // 4. Registra a Mestra como par
+  // 5. Registra a Mestra como par
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
   peerInfo.channel = WIFI_CHANNEL;  
   peerInfo.encrypt = false;
   
   if (esp_now_add_peer(&peerInfo) != ESP_OK){
-    Serial.println("Falha ao adicionar par");
+    Serial.println("Falha ao adicionar par (Verifique o MAC)");
     return;
   }
+  
+  Serial.println("Slave Iniciado! Enviando dados...");
 }
 
 void loop() {
-  // Lê dados (Ajuste conforme sua lib Gyroscope)
+  // 1. ATUALIZA O SENSOR (CRÍTICO!)
+  // Na sua classe Gyroscope, a leitura I2C acontece dentro de loop() -> readData()
+  gyro->loop(); 
+
+  // 2. Coleta os dados atualizados das variáveis internas da classe
   int16_t ax, ay, az, temp;
   gyro->getData(&ax, &ay, &az, &temp, &myData.gx, &myData.gy, &myData.gz);
 
-  // Envia via ESP-NOW (Muito rápido < 1ms)
-  esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
+  // 3. Envia via ESP-NOW
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
   
-  // Taxa de atualização (100Hz = 10ms)
+  // Debug de erro grave apenas
+  if (result != ESP_OK) {
+    // Serial.println("Erro de envio ESP-NOW");
+  }
+  
+  // 4. Taxa de atualização (10ms = 100Hz)
   delay(10);
 }
