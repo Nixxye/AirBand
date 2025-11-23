@@ -12,9 +12,6 @@ volatile int16_t WifiServer::rx_gz = 0;
 void WifiServer::OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     slave_msg_t msg;
     if (len == sizeof(msg)) {
-        Serial.println("Dados recebidos na escrava: ");
-        Serial.print("Gx: ");
-        Serial.println(msg.gx);
         memcpy(&msg, incomingData, sizeof(msg));
         // Salva nas variáveis voláteis para o loop principal ler
         rx_gx = msg.gx;
