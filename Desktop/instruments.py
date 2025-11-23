@@ -1,17 +1,11 @@
 import math
 
-# Interface base conforme solicitado
 class InputData:
-    """ 
-    Interface base. 
-    Na nova arquitetura com Worker, ela não busca dados, 
-    apenas define o contrato para os instrumentos processarem.
-    """
+    """ Interface base. """
     def process_data(self, data, mappings, emulator):
         pass
 
 class Instrument(InputData):
-    """ Classe base genérica para instrumentos com estado. """
     def __init__(self):
         self.lanes_vector = [0, 0, 0, 0]
 
@@ -20,8 +14,7 @@ class Drum(Instrument):
         super().__init__()
 
     def process_data(self, camera_data, mappings, emulator):
-        # Implementação futura da bateria via câmera
-        # Poderia mapear hits para os botões do emulador se desejar
+        # Lógica futura da bateria
         pass
 
 class Guitar(Instrument):
@@ -33,48 +26,54 @@ class Guitar(Instrument):
             "Dedo 3 (Anelar)", 
             "Dedo 4 (Mindinho)"
         ]
-        # A lógica de Strum existe, mas não será enviada ao emulador atual
-        self.strum_action = "Batida (Giroscópio)"
+        # Limiares de Histerese (0.0 a 1.0)
+        # Trigger baixo (0.15) significa que basta dobrar 15% para ativar!
+        self.TRIGGER_THRESHOLD = 0.15 
+        self.RELEASE_THRESHOLD = 0.30 
 
     def process_data(self, logical_data, mappings, emulator):
         """
-        Processa lógica de Dedos (Lanes).
-        Chamado automaticamente pelo Worker em alta frequência.
+        Processa lógica de Dedos com Histerese para latência zero.
         """
         
-        # --- 1. Lógica do Vetor de Lanes ---
-        new_lanes = [0, 0, 0, 0]
+        new_lanes = self.lanes_vector[:] # Copia o estado atual
         
         for i, action in enumerate(self.finger_actions):
             if action in mappings and action in logical_data:
-                val = logical_data[action]
+                val = float(logical_data[action])
                 calib = mappings[action]
                 
                 try:
-                    half = float(calib.get("half", 0))
+                    # Usa apenas Rest e Full para definir o range total
+                    rest = float(calib.get("rest", 0))
                     full = float(calib.get("full", 0))
                     
-                    # Garante intervalo min/max (sensores flex podem inverter dependendo da montagem)
-                    lim_inf = min(half, full)
-                    lim_sup = max(half, full)
+                    # Evita divisão por zero se calibração estiver ruim
+                    total_range = full - rest
+                    if abs(total_range) < 10: 
+                        continue
+
+                    # 1. Calcula % de flexão (0.0 a 1.0+)
+                    # Funciona tanto para sensores diretos quanto inversos
+                    progress = (val - rest) / total_range
                     
-                    # Ativa se estiver na zona de pressão (entre meio e completo)
-                    if lim_inf <= val <= lim_sup:
-                        new_lanes[i] = 1
-                    # Se passou do máximo (apertou muito forte além da calibração), mantém ativo
-                    elif abs(val - full) < abs(val - half):
-                        new_lanes[i] = 1
+                    # 2. Máquina de Estados (Histerese)
+                    is_active = (self.lanes_vector[i] == 1)
+                    
+                    if not is_active:
+                        # Borda de Subida: Se passou de 15%, ATIVA
+                        if progress > self.TRIGGER_THRESHOLD:
+                            new_lanes[i] = 1
                     else:
-                        new_lanes[i] = 0
+                        # Borda de Descida: Só desativa se voltar para < 10%
+                        # Isso permite manter a nota pressionada mesmo relaxando um pouco
+                        if progress < self.RELEASE_THRESHOLD:
+                            new_lanes[i] = 0
                         
                 except (ValueError, TypeError):
-                    new_lanes[i] = 0
+                    pass
 
-        # Atualiza emulador apenas se houver mudança nos dedos
-        # O emulador fornecido usa 'atualizar_estado' com vetor de 4 posições
+        # Atualiza emulador apenas se houver mudança
         if new_lanes != self.lanes_vector:
             self.lanes_vector = new_lanes
             emulator.atualizar_estado(self.lanes_vector)
-
-        # Nota: A lógica de Strum (Giroscópio) foi omitida aqui pois
-        # o Emulator fornecido não possui o método 'realizar_palhetada'.
