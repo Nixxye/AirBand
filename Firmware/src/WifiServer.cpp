@@ -1,83 +1,83 @@
 #include "WifiServer.hpp"
+#include <esp_wifi.h>
 
 WifiServer* WifiServer::instance = nullptr;
+
+// Inicializa variáveis estáticas
+volatile int16_t WifiServer::rx_gx = 0;
+volatile int16_t WifiServer::rx_gy = 0;
+volatile int16_t WifiServer::rx_gz = 0;
+
+// Callback: Roda quando chega dado da Escrava
+void WifiServer::OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+    slave_msg_t msg;
+    if (len == sizeof(msg)) {
+        memcpy(&msg, incomingData, sizeof(msg));
+        // Salva nas variáveis voláteis para o loop principal ler
+        rx_gx = msg.gx;
+        rx_gy = msg.gy;
+        rx_gz = msg.gz;
+    }
+}
 
 WifiServer::WifiServer(const char* ssid, const char* password) 
     : ap_ssid(ssid), ap_password(password), lastSendTime(0) 
 {
-    // Define o IP padrão do PC conectado ao SoftAP do ESP32
-    // O ESP é 192.168.4.1, o primeiro cliente recebe 192.168.4.2
     pcIP = IPAddress(192, 168, 4, 2);
-
-    Serial.println("|WifiServer| ------- Iniciando UDP Turbo ---------");
-
-    // Inicializa Sensores
+    
     gyro = Gyroscope::Init_Gyroscope();
     mag = Magnetometer::Init_Magnetometer();
     adcReader = AnalogReader::Init_AnalogReader();
 
-    // 1. Configura Wi-Fi AP
+    // Configura Wi-Fi AP no Canal Específico
     WiFi.mode(WIFI_AP);
+    WiFi.setSleep(false);
     
-    // 2. CRUCIAL: Desativa Power Save (Salva ~100ms de latência)
-    WiFi.setSleep(false); 
-    
-    WiFi.softAP(ap_ssid, ap_password);
-    
-    Serial.print("|WifiServer| AP Iniciado. IP: ");
-    Serial.println(WiFi.softAPIP());
+    WiFi.softAP(ap_ssid, ap_password, WIFI_CHANNEL); 
 
-    // 3. Inicia escuta UDP (caso precise receber comandos do PC depois)
+    Serial.print("MAC Address da Mestra: ");
+    Serial.println(WiFi.macAddress());
+
+    // Inicia ESP-NOW
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("Erro ESP-NOW");
+    }
+    esp_now_register_recv_cb(OnDataRecv);
+
     udp.begin(UDP_PORT);
 }
 
-WifiServer::~WifiServer() {
-    // Destrutor
-}
-
 WifiServer* WifiServer::Init_WifiServer(const char* ssid, const char* password) {
-    if (instance == nullptr) {
-        instance = new WifiServer(ssid, password);
-    }
+    if (instance == nullptr) instance = new WifiServer(ssid, password);
     return instance;
 }
 
 void WifiServer::sendDataToClient() {
     unsigned long now = millis();
-
-    // Envio constante (Time-Driven, não Event-Driven)
-    if (now - lastSendTime >= SEND_INTERVAL_MS) {
+    if (now - lastSendTime >= 10) { // 10ms = 100Hz
         lastSendTime = now;
 
-        // Verifica se tem alguém conectado no Wi-Fi para não falar sozinho
         if (WiFi.softAPgetStationNum() > 0) {
-            
             SensorPacket packet;
 
-            // --- Preenchimento Rápido da Struct ---
-            // Variável temporária para temperatura (se não for usar)
-            int16_t temp_trash; 
+            // Sensores Locais (Mestra)
+            int16_t temp;
+            gyro->getData(&packet.ax, &packet.ay, &packet.az, &temp, &packet.gx, &packet.gy, &packet.gz);
             
-            // Giroscópio/Acelerômetro
-            gyro->getData(&packet.ax, &packet.ay, &packet.az, &temp_trash, &packet.gx, &packet.gy, &packet.gz);
-            
-            // Magnetômetro (Convertendo pointers para o tipo correto se necessário)
-            String bearing_trash; // Ignoramos strings para performance
-            // Assumindo aqui que mx, my, mz são ints
-            mag->getData((int*)&packet.mx, (int*)&packet.my, (int*)&packet.mz, &packet.heading, bearing_trash);
-
-            // ADC
+            String trash;
+            mag->getData((int*)&packet.mx, (int*)&packet.my, (int*)&packet.mz, &packet.heading, trash);
             adcReader->getData(&packet.v32, &packet.v33, &packet.v34, &packet.v35);
 
-            // Timestamp (para calcular latência no PC)
+            // Sensores Remotos (Escrava - recuperados da volatile)
+            packet.slave_gx = rx_gx;
+            packet.slave_gy = rx_gy;
+            packet.slave_gz = rx_gz;
+
             packet.timestamp = now;
 
-            // --- Envio UDP ---
-            // beginPacket prepara o cabeçalho
             udp.beginPacket(pcIP, UDP_PORT);
-            // write envia os bytes brutos da memória
             udp.write((const uint8_t*)&packet, sizeof(SensorPacket));
-            udp.endPacket(); 
+            udp.endPacket();
         }
     }
 }

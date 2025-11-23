@@ -33,7 +33,7 @@ class MainApplication(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Air Band 🤘 (Multi-Thread)")
+        self.setWindowTitle("Air Band 🤘 (Multi-Thread + Slave)")
         self.setGeometry(300, 200, 800, 700)
 
         self.sensor_mappings = {}
@@ -54,7 +54,7 @@ class MainApplication(QMainWindow):
             self.emulator
         )
         self.worker.update_mappings(self.sensor_mappings) # Passa config inicial
-        self.worker.start() # Inicia loop de alta frequência (1ms delay)
+        self.worker.start() # Inicia loop de alta frequência
 
         # --- 3. Configuração da UI ---
         self.tabs = QTabWidget(self)
@@ -75,8 +75,7 @@ class MainApplication(QMainWindow):
         # --- 4. Timers da Interface (Apenas Visualização) ---
         
         # Timer Visual: Atualiza apenas os textos de debug na tela.
-        # Não precisa ser 10ms (100Hz) pois o olho humano não vê, 
-        # mas mantivemos rápido (30ms / ~33FPS) para fluidez.
+        # 30ms (~33FPS) é suficiente para o olho humano.
         self.ui_timer = QTimer(self)
         self.ui_timer.timeout.connect(self.update_ui_visuals)
         self.ui_timer.start(30) 
@@ -145,8 +144,8 @@ class MainApplication(QMainWindow):
         # Passa dados para o terminal na aba "Controle"
         self.main_menu_tab.update_sensor_data(raw_data)
         
-        # NOTA: A lógica de processamento da guitarra foi removida daqui 
-        # e movida para worker.py para garantir performance.
+        # A lógica da guitarra (self.guitar.process_data) foi removida daqui 
+        # pois agora roda no worker.py
 
     def closeEvent(self, event):
         """ Garante encerramento limpo de todas as threads. """
@@ -187,7 +186,7 @@ class InstructionsScreen(Screen):
             <li>Vá para a aba 'Calibração'.</li>
             <li>Clique em "Calibrar Dedo 1" e siga as instruções.</li>
             <li>Para "Batidas", clique em "Batida (Giroscópio)". Você gravará: Repouso, Batida p/ Cima e Batida p/ Baixo.</li>
-            <li>O app irá <b>auto-detectar</b> qual eixo do giroscópio usar.</li>
+            <li>O app irá <b>auto-detectar</b> qual eixo do giroscópio usar (Master ou Slave).</li>
             <li>Retorne à aba 'Controle' e toque!</li>
         </ol>
 
@@ -321,7 +320,6 @@ class CalibrationScreen(Screen):
         return widget
 
     def start_timer(self):
-        # Mantido rápido para calibração precisa
         self.timer.start(10)
         self.update_calibration_status_labels()
 
@@ -335,11 +333,13 @@ class CalibrationScreen(Screen):
             return
 
         texto = ""
+        # Mostra apenas dados relevantes (ADC, Gyro Mestra, Gyro Slave)
         for key, value in sorted(raw_data.items()):
-            if isinstance(value, (float)):
-                texto += f"<span style='color:#00FFFF;'>{key}:</span> {value:.2f}\n"
-            else:
-                texto += f"<span style='color:#00FFFF;'>{key}:</span> {value}\n"
+            if "adc" in key or "gyro" in key or "slave" in key:
+                if isinstance(value, (float)):
+                    texto += f"<span style='color:#00FFFF;'>{key}:</span> {value:.2f}\n"
+                else:
+                    texto += f"<span style='color:#00FFFF;'>{key}:</span> {value}\n"
         self.sensor_output.setHtml(texto)
 
         # LÓGICA DE CAPTURA DO PICO (BATIDA - CIMA ou BAIXO)
@@ -348,26 +348,37 @@ class CalibrationScreen(Screen):
             if not rest_data:
                 return
 
-            sensor_prefixes = ["gyro_"]
+            # Agora verificamos tanto o Gyro da Mestra quanto o da Escrava
+            sensor_prefixes = ["gyro_", "slave_"] 
+            
             for prefix in sensor_prefixes:
                 try:
-                    # Calcula a magnitude vetorial (intensidade absoluta)
-                    current_mag = math.sqrt(
-                        float(raw_data.get(f"{prefix}ax", 0))**2 +
-                        float(raw_data.get(f"{prefix}ay", 0))**2 +
-                        float(raw_data.get(f"{prefix}az", 0))**2
-                    )
-                    rest_mag = math.sqrt(
-                        float(rest_data.get(f"{prefix}ax", 0))**2 +
-                        float(rest_data.get(f"{prefix}ay", 0))**2 +
-                        float(rest_data.get(f"{prefix}az", 0))**2
-                    )
+                    # Helper para normalizar os nomes (ax/ay/az para Mestra, gx/gy/gz para Escrava)
+                    def get_vector(data, p):
+                        # Mestra usa acelerômetro (ax, ay, az)
+                        if data.get(f"{p}ax") is not None:
+                            return data.get(f"{p}ax"), data.get(f"{p}ay"), data.get(f"{p}az")
+                        # Escrava usa giroscópio (gx, gy, gz)
+                        elif data.get(f"{p}gx") is not None:
+                            return data.get(f"{p}gx"), data.get(f"{p}gy"), data.get(f"{p}gz")
+                        return None, None, None
+
+                    curr_x, curr_y, curr_z = get_vector(raw_data, prefix)
+                    rest_x, rest_y, rest_z = get_vector(rest_data, prefix)
+
+                    if curr_x is None or rest_x is None: 
+                        continue
+
+                    # Calcula magnitudes
+                    current_mag = math.sqrt(curr_x**2 + curr_y**2 + curr_z**2)
+                    rest_mag = math.sqrt(rest_x**2 + rest_y**2 + rest_z**2)
                     
-                    # O "Peak Hold" captura o momento de maior diferença em relação ao repouso
                     current_deviation = abs(current_mag - rest_mag)
+                    
                     if current_deviation > self.current_peak_magnitude:
                         self.current_peak_magnitude = current_deviation
                         self.current_peak_snapshot = raw_data.copy()
+                        
                 except (ValueError, TypeError):
                     continue 
 
@@ -454,17 +465,20 @@ class CalibrationScreen(Screen):
                 self.current_peak_magnitude = -1.0
                 self.is_recording_peak = True
                 self.current_calibration_step = 3
+                self.wizard_capture_btn.setText("PARAR Gravação")
 
             elif step == 3: # Parar Rec Cima
                 self.is_recording_peak = False
                 self.temp_snapshots["up"] = self.current_peak_snapshot.copy()
                 self.current_calibration_step = 4
+                self.wizard_capture_btn.setText("INICIAR GRAVAÇÃO (BAIXO)")
 
             elif step == 4: # Iniciar Rec Baixo
                 self.current_peak_snapshot = self.temp_snapshots["rest"].copy()
                 self.current_peak_magnitude = -1.0
                 self.is_recording_peak = True
                 self.current_calibration_step = 5
+                self.wizard_capture_btn.setText("PARAR Gravação")
 
             elif step == 5: # Parar Rec Baixo
                 self.is_recording_peak = False
@@ -492,22 +506,24 @@ class CalibrationScreen(Screen):
         return detected_key
 
     def _find_best_sensor_group(self, snap_rest, snap_peak, sensor_prefix_filter):
-        """ Encontra o prefixo (ex: gyro_) que teve maior magnitude de variação """
+        """ Encontra o prefixo (ex: gyro_ ou slave_) que teve maior magnitude de variação """
         max_delta_mag = -1
         detected_prefix = None
+        
         for prefix in sensor_prefix_filter:
             try:
-                mag_a = math.sqrt(
-                    float(snap_rest.get(f"{prefix}ax", 0))**2 +
-                    float(snap_rest.get(f"{prefix}ay", 0))**2 +
-                    float(snap_rest.get(f"{prefix}az", 0))**2
-                )
-                mag_b = math.sqrt(
-                    float(snap_peak.get(f"{prefix}ax", 0))**2 +
-                    float(snap_peak.get(f"{prefix}ay", 0))**2 +
-                    float(snap_peak.get(f"{prefix}az", 0))**2
-                )
-                delta_mag = abs(mag_b - mag_a)
+                # Helper para normalizar os nomes (ax/ay/az para Mestra, gx/gy/gz para Escrava)
+                def get_mag(data, p):
+                    x = data.get(f"{p}ax") or data.get(f"{p}gx")
+                    y = data.get(f"{p}ay") or data.get(f"{p}gy")
+                    z = data.get(f"{p}az") or data.get(f"{p}gz")
+                    if x is None: return 0.0
+                    return math.sqrt(float(x)**2 + float(y)**2 + float(z)**2)
+
+                mag_rest = get_mag(snap_rest, prefix)
+                mag_peak = get_mag(snap_peak, prefix)
+                
+                delta_mag = abs(mag_peak - mag_rest)
                 if delta_mag > max_delta_mag:
                     max_delta_mag = delta_mag
                     detected_prefix = prefix
@@ -539,38 +555,34 @@ class CalibrationScreen(Screen):
     def finish_strum_calibration(self):
         action = self.current_calibration_action
         
-        # 1. Detectar melhor grupo de sensores usando a Batida Cima (maior esforço geralmente)
+        # 1. Detectar melhor grupo de sensores (Master ou Slave)
         detected_prefix = self._find_best_sensor_group(
             self.temp_snapshots["rest"], 
             self.temp_snapshots["up"],
-            sensor_prefix_filter=["gyro_"] 
+            sensor_prefix_filter=["gyro_", "slave_"] 
         )
         
         if detected_prefix:
+            # Helper para extrair vetor normalizado
+            def extract_vec(data, p):
+                return {
+                    "ax": data.get(f"{p}ax") or data.get(f"{p}gx"),
+                    "ay": data.get(f"{p}ay") or data.get(f"{p}gy"),
+                    "az": data.get(f"{p}az") or data.get(f"{p}gz")
+                }
+
             # 2. Salvar dados vetoriais de Cima e Baixo
             mapping = {
                 "key_prefix": detected_prefix,
-                "rest": {
-                    "ax": self.temp_snapshots["rest"].get(f"{detected_prefix}ax", 0),
-                    "ay": self.temp_snapshots["rest"].get(f"{detected_prefix}ay", 0),
-                    "az": self.temp_snapshots["rest"].get(f"{detected_prefix}az", 0)
-                },
-                "up": {
-                    "ax": self.temp_snapshots["up"].get(f"{detected_prefix}ax", 0),
-                    "ay": self.temp_snapshots["up"].get(f"{detected_prefix}ay", 0),
-                    "az": self.temp_snapshots["up"].get(f"{detected_prefix}az", 0)
-                },
-                "down": {
-                    "ax": self.temp_snapshots["down"].get(f"{detected_prefix}ax", 0),
-                    "ay": self.temp_snapshots["down"].get(f"{detected_prefix}ay", 0),
-                    "az": self.temp_snapshots["down"].get(f"{detected_prefix}az", 0)
-                }
+                "rest": extract_vec(self.temp_snapshots["rest"], detected_prefix),
+                "up":   extract_vec(self.temp_snapshots["up"], detected_prefix),
+                "down": extract_vec(self.temp_snapshots["down"], detected_prefix)
             }
             self.main_app.sensor_mappings[action] = mapping
             self.main_app.save_mappings_to_file()
             QMessageBox.information(self, "Sucesso", 
                 f"Calibração de Batida Salva!\n"
-                f"Repouso, Cima e Baixo capturados no sensor {detected_prefix}")
+                f"Sensor detectado: {detected_prefix}")
         else:
             QMessageBox.warning(self, "Erro", "Movimento insuficiente detectado.")
         
