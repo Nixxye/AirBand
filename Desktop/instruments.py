@@ -26,47 +26,62 @@ class Guitar(Instrument):
             "Dedo 3 (Anelar)", 
             "Dedo 4 (Mindinho)"
         ]
-        # Limiares de Histerese (0.0 a 1.0)
-        # Trigger baixo (0.15) significa que basta dobrar 15% para ativar!
-        self.TRIGGER_THRESHOLD = 0.15 
-        self.RELEASE_THRESHOLD = 0.30 
+        
+        # --- Configuração de Sensibilidade ---
+        # Trigger: Ativa ao passar de 15% de flexão
+        self.TRIGGER_THRESHOLD = 0.15
+        # Release: Só desativa se voltar para menos de 10% (Histerese)
+        self.RELEASE_THRESHOLD = 0.10
+        
+        # --- Configuração do Filtro ---
+        # Alpha 0.3: 30% valor novo, 70% histórico (Suave e rápido)
+        # Diminua para mais suavidade (ex: 0.1), aumente para mais rapidez (ex: 0.8)
+        self.FILTER_ALPHA = 0.3 
+        self.smoothed_values = {} # Armazena o estado anterior de cada dedo
 
     def process_data(self, logical_data, mappings, emulator):
         """
-        Processa lógica de Dedos com Histerese para latência zero.
+        Processa lógica de Dedos com Histerese e Filtro Anti-Ruído.
         """
         
         new_lanes = self.lanes_vector[:] # Copia o estado atual
         
         for i, action in enumerate(self.finger_actions):
             if action in mappings and action in logical_data:
-                val = float(logical_data[action])
+                raw_val = float(logical_data[action])
                 calib = mappings[action]
                 
+                # --- 1. Aplica Filtro EMA (Exponential Moving Average) ---
+                # Pega o valor anterior (ou usa o atual se for a primeira vez)
+                prev_val = self.smoothed_values.get(action, raw_val)
+                
+                # Fórmula do filtro: suaviza picos repentinos
+                val = (raw_val * self.FILTER_ALPHA) + (prev_val * (1.0 - self.FILTER_ALPHA))
+                
+                # Atualiza histórico
+                self.smoothed_values[action] = val
+
                 try:
-                    # Usa apenas Rest e Full para definir o range total
                     rest = float(calib.get("rest", 0))
                     full = float(calib.get("full", 0))
                     
-                    # Evita divisão por zero se calibração estiver ruim
                     total_range = full - rest
+                    # Evita erro de divisão ou calibração muito curta (ruído puro)
                     if abs(total_range) < 10: 
                         continue
 
-                    # 1. Calcula % de flexão (0.0 a 1.0+)
-                    # Funciona tanto para sensores diretos quanto inversos
+                    # --- 2. Calcula % de flexão (Normalização) ---
                     progress = (val - rest) / total_range
                     
-                    # 2. Máquina de Estados (Histerese)
+                    # --- 3. Máquina de Estados (Histerese) ---
                     is_active = (self.lanes_vector[i] == 1)
                     
                     if not is_active:
-                        # Borda de Subida: Se passou de 15%, ATIVA
+                        # Gatilho (Ataque)
                         if progress > self.TRIGGER_THRESHOLD:
                             new_lanes[i] = 1
                     else:
-                        # Borda de Descida: Só desativa se voltar para < 10%
-                        # Isso permite manter a nota pressionada mesmo relaxando um pouco
+                        # Liberação (Relaxamento)
                         if progress < self.RELEASE_THRESHOLD:
                             new_lanes[i] = 0
                         
