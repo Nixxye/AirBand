@@ -5,7 +5,7 @@
 
 // --- CONFIGURAÇÃO ---
 // MAC Address da ESP32 MESTRA
-uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; 
+uint8_t broadcastAddress[] = {0x6C, 0xC8, 0x8B, 0x40, 0xD0}; 
 #define WIFI_CHANNEL 1
 
 // Estrutura de envio (Apenas dados do Slave)
