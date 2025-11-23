@@ -6,7 +6,7 @@
 
 // --- CONFIGURAÇÃO ---
 // MAC Address da ESP32 MESTRA
-uint8_t broadcastAddress[] = {0x6C, 0xC8, 0x8B, 0x40, 0xD0}; 
+uint8_t broadcastAddress[] = {0x6C, 0xC8, 0x40, 0x8B, 0x40, 0xD1}; 
 #define WIFI_CHANNEL 1
 
 // Estrutura de envio (Apenas dados do Slave)
@@ -21,12 +21,12 @@ esp_now_peer_info_t peerInfo;
 Gyroscope* gyro;
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  Serial.print("\r\nStatus do Envio: ");
-  if (status == ESP_NOW_SEND_SUCCESS) {
-    Serial.println("Entregue com Sucesso! (Mestra confirmou)");
-  } else {
-    Serial.println("FALHA na entrega (Mestra desligada ou longe?)");
-  }
+  // Serial.print("\r\nStatus do Envio: ");
+  // if (status == ESP_NOW_SEND_SUCCESS) {
+  //   Serial.println("Entregue com Sucesso! (Mestra confirmou)");
+  // } else {
+  //   Serial.println("FALHA na entrega (Mestra desligada ou longe?)");
+  // }
 }
 
 void setup() {

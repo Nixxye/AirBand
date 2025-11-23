@@ -12,6 +12,9 @@ volatile int16_t WifiServer::rx_gz = 0;
 void WifiServer::OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     slave_msg_t msg;
     if (len == sizeof(msg)) {
+        Serial.println("Dados recebidos na escrava: ");
+        Serial.print("Gx: ");
+        Serial.println(msg.gx);
         memcpy(&msg, incomingData, sizeof(msg));
         // Salva nas variáveis voláteis para o loop principal ler
         rx_gx = msg.gx;
@@ -30,7 +33,7 @@ WifiServer::WifiServer(const char* ssid, const char* password)
     adcReader = AnalogReader::Init_AnalogReader();
 
     // Configura Wi-Fi AP no Canal Específico
-    WiFi.mode(WIFI_AP);
+    WiFi.mode(WIFI_AP_STA);
     WiFi.setSleep(false);
     
     WiFi.softAP(ap_ssid, ap_password, WIFI_CHANNEL); 
