@@ -127,6 +127,7 @@ class Emulator:
                          com valores booleanos (0 ou 1).
             Ex: [1, 0, 0, 0] para o botão Verde pressionado.
         """
+        print(f"\nAtualizando estado para: {novo_estado}")
         if len(novo_estado) != 4:
             raise ValueError("O novo_estado deve ser um vetor de 4 posições.")
         if not all(isinstance(x, int) and x in [0, 1] for x in novo_estado):
