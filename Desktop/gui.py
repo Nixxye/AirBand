@@ -21,6 +21,89 @@ from emulator import Emulator
 from instruments import Guitar, Drum
 from worker import InstrumentWorker  # <--- Import do Worker
 
+import pyqtgraph as pg
+from collections import deque
+import pyqtgraph.opengl as gl
+import numpy as np
+from collections import deque
+
+
+class SensorVisualizer3D(QWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.main_app = parent
+        
+        layout = QVBoxLayout(self)
+
+        # --- 1. Visualização 3D (Vetores) ---
+        self.view_3d = gl.GLViewWidget()
+        self.view_3d.opts['distance'] = 20  # Distância da câmera
+        self.view_3d.setWindowTitle('Vetores de Aceleração')
+        self.view_3d.setGeometry(0, 110, 1920, 1080)
+
+        # Grades e Eixos para referência
+        gz = gl.GLGridItem()
+        gz.translate(0, 0, -1)
+        self.view_3d.addItem(gz)
+        self.view_3d.addItem(gl.GLAxisItem())
+
+        # Vetor Mestra (Ciano)
+        self.master_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(0, 1, 1, 1), width=3, antialias=True)
+        self.view_3d.addItem(self.master_line)
+        
+        # Vetor Escrava (Magenta)
+        self.slave_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(1, 0, 1, 1), width=3, antialias=True)
+        self.view_3d.addItem(self.slave_line)
+
+        layout.addWidget(self.view_3d, stretch=2) # Ocupa 2/3 da tela
+
+        # --- 2. Gráfico de Linha (ADCs) ---
+        self.plot_adc = pg.PlotWidget(title="Flexão dos Dedos (ADC)")
+        self.plot_adc.addLegend()
+        self.adc_curves = [
+            self.plot_adc.plot(pen='y', name='D1'),
+            self.plot_adc.plot(pen='c', name='D2'),
+            self.plot_adc.plot(pen='m', name='D3'),
+            self.plot_adc.plot(pen='w', name='D4')
+        ]
+        layout.addWidget(self.plot_adc, stretch=1) # Ocupa 1/3 da tela
+
+        # Buffers
+        self.buffer_size = 100
+        self.adc_data = [deque([0]*self.buffer_size, maxlen=self.buffer_size) for _ in range(4)]
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_visuals)
+
+    def start_timer(self):
+        self.timer.start(30) # ~30 FPS
+
+    def stop_timer(self):
+        self.timer.stop()
+
+    def update_visuals(self):
+        raw = self.main_app.communication.get_latest_data()
+        if not raw: return
+
+        # --- Atualiza Vetores 3D ---
+        # Fator de escala visual (ajuste conforme a sensibilidade do seu sensor)
+        scale = 0.5 
+        
+        # Mestra (ax, ay, az)
+        mx, my, mz = raw.get('ax', 0), raw.get('ay', 0), raw.get('az', 0)
+        self.master_line.setData(pos=np.array([[0, 0, 0], [mx*scale, my*scale, mz*scale]]))
+
+        # Escrava (slave_ax ou slave_gx...)
+        sx = raw.get('slave_ax', raw.get('slave_gx', 0))
+        sy = raw.get('slave_ay', raw.get('slave_gy', 0))
+        sz = raw.get('slave_az', raw.get('slave_gz', 0))
+        self.slave_line.setData(pos=np.array([[0, 0, 0], [sx*scale, sy*scale, sz*scale]]))
+
+        # --- Atualiza Gráfico ADC ---
+        for i, curve in enumerate(self.adc_curves):
+            val = raw.get(f'adc_{i+1}', 0)
+            self.adc_data[i].append(val)
+            curve.setData(self.adc_data[i])
 # =============================================================================
 # CLASSES PRINCIPAIS
 # =============================================================================
@@ -61,6 +144,7 @@ class MainApplication(QMainWindow):
         self.tabs.setMovable(True)
 
         # Instancia as telas
+        self.graphs_tab = SensorVisualizer3D(self)
         self.instructions_tab = InstructionsScreen(self)
         self.main_menu_tab = MainMenuScreen(self)
         self.calibration_tab = CalibrationScreen(self)
@@ -68,6 +152,7 @@ class MainApplication(QMainWindow):
         self.tabs.addTab(self.instructions_tab, "🏠 Início")
         self.tabs.addTab(self.main_menu_tab, "⚙️ Controle")
         self.tabs.addTab(self.calibration_tab, "🎛️ Calibração")
+        self.tabs.addTab(self.graphs_tab, "📈 Gráficos")
 
         self.setCentralWidget(self.tabs)
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -96,6 +181,11 @@ class MainApplication(QMainWindow):
             self.calibration_tab.start_timer()
         else:
             self.calibration_tab.stop_timer()
+
+        if current_widget == self.graphs_tab:
+            self.graphs_tab.start_timer()
+        else:
+            self.graphs_tab.stop_timer()
 
     # ============ Funções de Controle ============
     def load_mappings_from_file(self):
