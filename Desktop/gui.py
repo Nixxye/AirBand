@@ -29,31 +29,27 @@ from collections import deque
 
 
 class SensorVisualizer3D(QWidget):
-    # --- CONSTANTES DE CALIBRAÇÃO (Ajuste conforme sua necessidade) ---
-    CONST_X = 0.10
-    CONST_Y = 0.40
+    # --- CONSTANTES DE CALIBRAÇÃO ---
+    CONST_X = 0.5  # Linha Verde (50%)
+    CONST_Y = 0.8  # Linha Vermelha (80%)
 
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
         
-        # Layout Principal (Vertical)
         main_layout = QVBoxLayout(self)
 
-        # ==========================================================
-        # 1. ÁREA 3D (VETORES) - Topo
-        # ==========================================================
+        # 1. ÁREA 3D (VETORES)
         self.view_3d = gl.GLViewWidget()
         self.view_3d.opts['distance'] = 20
         self.view_3d.setWindowTitle('Vetores de Aceleração')
-        self.view_3d.setFixedHeight(400) # Fixa altura para sobrar espaço para os gráficos
+        self.view_3d.setFixedHeight(400)
 
         gz = gl.GLGridItem()
         gz.translate(0, 0, -1)
         self.view_3d.addItem(gz)
         self.view_3d.addItem(gl.GLAxisItem())
 
-        # Vetores
         self.master_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(0, 1, 1, 1), width=3, antialias=True)
         self.view_3d.addItem(self.master_line)
         
@@ -62,55 +58,42 @@ class SensorVisualizer3D(QWidget):
 
         main_layout.addWidget(self.view_3d)
 
-        # ==========================================================
-        # 2. ÁREA 2D (GRÁFICOS INDIVIDUAIS DOS DEDOS) - Base
-        # ==========================================================
-        
-        # Grid 2x2 para os 4 dedos
+        # 2. ÁREA 2D (GRÁFICOS INDIVIDUAIS DOS DEDOS)
         adc_grid = QGridLayout()
         main_layout.addLayout(adc_grid)
 
-        # Configurações dos dedos
         self.finger_configs = [
-            {"name": "Dedo 1 (Indicador)", "key": "adc_v32", "label": "D1: Indicador"},
-            {"name": "Dedo 2 (Médio)",     "key": "adc_v33", "label": "D2: Médio"},
-            {"name": "Dedo 3 (Anelar)",    "key": "adc_v34", "label": "D3: Anelar"},
-            {"name": "Dedo 4 (Mindinho)",  "key": "adc_v35", "label": "D4: Mindinho"},
+            {"name": "Dedo 1 (Indicador)", "label": "D1: Indicador"},
+            {"name": "Dedo 2 (Médio)",     "label": "D2: Médio"},
+            {"name": "Dedo 3 (Anelar)",    "label": "D3: Anelar"},
+            {"name": "Dedo 4 (Mindinho)",  "label": "D4: Mindinho"},
         ]
 
-        self.adc_plots = []      # Lista para guardar os widgets de plot
-        self.adc_curves = []     # Lista para as curvas de sinal
-        self.threshold_lines = [] # Lista para guardar as linhas de calibração (pares)
+        self.adc_plots = []
+        self.adc_curves = []
+        self.threshold_lines = []
         
         self.buffer_size = 100
-        self.adc_buffers = [deque([0]*self.buffer_size, maxlen=self.buffer_size) for _ in range(4)]
+        # Renomeado para adc_data para bater com seu código
+        self.adc_data = [deque([0]*self.buffer_size, maxlen=self.buffer_size) for _ in range(4)]
 
-        # Criação dos 4 gráficos num loop
         for i, config in enumerate(self.finger_configs):
-            # Cria Widget de Plot
             plot = pg.PlotWidget(title=config["label"])
             plot.showGrid(x=True, y=True, alpha=0.3)
-            plot.setYRange(0, 4100) # Faixa fixa do ESP32 (0 a 4095) ajuda a visualizar melhor
+            plot.setYRange(0, 4100)
             
-            # Curva do Sinal (Amarela)
             curve = plot.plot(pen=pg.mkPen('y', width=2))
             
-            # --- Linhas de Calibração ---
-            # Linha X (Verde - tracejada)
             line_x = pg.InfiniteLine(angle=0, pen=pg.mkPen('g', style=pg.QtCore.Qt.DashLine, width=1))
-            
-            # Linha Y (Vermelha - tracejada)
             line_y = pg.InfiniteLine(angle=0, pen=pg.mkPen('r', style=pg.QtCore.Qt.DashLine, width=1))
             
             plot.addItem(line_x)
             plot.addItem(line_y)
 
-            # Adiciona ao Grid (2 por linha)
             row = i // 2
             col = i % 2
             adc_grid.addWidget(plot, row, col)
 
-            # Armazena referências
             self.adc_plots.append(plot)
             self.adc_curves.append(curve)
             self.threshold_lines.append((line_x, line_y))
@@ -128,54 +111,41 @@ class SensorVisualizer3D(QWidget):
         raw = self.main_app.communication.get_latest_data()
         if not raw: return
 
-        # --- ATUALIZAÇÃO 3D (Vetores) ---
-        scale = 1.0 / 1000.0
+        # --- Atualiza Vetores 3D ---
+        scale = 0.5 
         
-        # Mestra
-        mx = raw.get('gyro_ax', 0) * scale
-        my = raw.get('gyro_ay', 0) * scale
-        mz = raw.get('gyro_az', 0) * scale
-        self.master_line.setData(pos=np.array([[0, 0, 0], [mx, my, mz]]))
+        # Mestra (ax, ay, az)
+        mx, my, mz = raw.get('ax', 0), raw.get('ay', 0), raw.get('az', 0)
+        self.master_line.setData(pos=np.array([[0, 0, 0], [mx*scale, my*scale, mz*scale]]))
 
-        # Escrava
-        sx = raw.get('slave_gx', 0) * scale
-        sy = raw.get('slave_gy', 0) * scale
-        sz = raw.get('slave_gz', 0) * scale
-        self.slave_line.setData(pos=np.array([[0, 0, 0], [sx, sy, sz]]))
+        # Escrava (slave_ax ou slave_gx...)
+        sx = raw.get('slave_ax', raw.get('slave_gx', 0))
+        sy = raw.get('slave_ay', raw.get('slave_gy', 0))
+        sz = raw.get('slave_az', raw.get('slave_gz', 0))
+        self.slave_line.setData(pos=np.array([[0, 0, 0], [sx*scale, sy*scale, sz*scale]]))
 
-        # --- ATUALIZAÇÃO 2D (Gráficos Individuais) ---
+        # --- Atualiza Gráfico ADC e Linhas de Calibração ---
         mappings = self.main_app.sensor_mappings
 
-        for i, config in enumerate(self.finger_configs):
-            # 1. Atualiza Sinal Real
-            val = raw.get(config["key"], 0)
-            self.adc_buffers[i].append(val)
-            self.adc_curves[i].setData(self.adc_buffers[i])
+        for i, curve in enumerate(self.adc_curves):
+            # 1. Dados do Sensor (Sua lógica)
+            # Nota: Certifique-se que sua struct envia adc_v1..v4 ou ajuste aqui
+            val = raw.get(f'adc_v{i+1}', 0) 
+            self.adc_data[i].append(val)
+            curve.setData(self.adc_data[i])
 
-            # 2. Atualiza Linhas de Calibração (Se houver calibração salva)
-            # Verifica se existe calibração para este dedo específico
-            finger_map_name = config["name"]
-            
-            if finger_map_name in mappings:
-                # Pega o valor 'full' (calibração de dedo pressionado)
-                # Nota: Seu json salva como "full": valor
-                max_val = mappings[finger_map_name].get("full", 0)
-                print(f"Calibração {finger_map_name}: full = {max_val}")
-                
-                # Calcula posições
-                pos_x = max_val * self.CONST_X
-                pos_y = max_val * self.CONST_Y
-                
-                # Atualiza posição das linhas
-                line_x, line_y = self.threshold_lines[i]
-                line_x.setPos(pos_x)
-                line_y.setPos(pos_y)
-                
-                # Opcional: Mostra valor se mouse passar (não implementado aqui para performance)
+            # 2. Linhas de Calibração (Mantido para funcionar o pedido anterior)
+            finger_name = self.finger_configs[i]["name"]
+            if finger_name in mappings:
+                max_val = mappings[finger_name].get("full", 0)
+                # Atualiza posições
+                self.threshold_lines[i][0].setPos(max_val * self.CONST_X)
+                self.threshold_lines[i][1].setPos(max_val * self.CONST_Y)
             else:
-                # Se não calibrado, linhas ficam no zero
                 self.threshold_lines[i][0].setPos(0)
                 self.threshold_lines[i][1].setPos(0)
+
+
 # =============================================================================
 # CLASSES PRINCIPAIS
 # =============================================================================
