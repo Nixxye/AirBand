@@ -30,8 +30,8 @@ from collections import deque
 
 class SensorVisualizer3D(QWidget):
     # --- CONSTANTES DE CALIBRAÇÃO ---
-    CONST_X = 0.5  # Linha Verde (50%)
-    CONST_Y = 0.8  # Linha Vermelha (80%)
+    CONST_X = 0.5  # Linha Verde (50% do máximo)
+    CONST_Y = 0.8  # Linha Vermelha (80% do máximo)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -74,13 +74,16 @@ class SensorVisualizer3D(QWidget):
         self.threshold_lines = []
         
         self.buffer_size = 100
-        # Renomeado para adc_data para bater com seu código
         self.adc_data = [deque([0]*self.buffer_size, maxlen=self.buffer_size) for _ in range(4)]
 
         for i, config in enumerate(self.finger_configs):
             plot = pg.PlotWidget(title=config["label"])
             plot.showGrid(x=True, y=True, alpha=0.3)
-            plot.setYRange(0, 4100)
+            
+            # --- CONFIGURAÇÃO DE ZOOM FIXO (0 a 3.3V) ---
+            plot.setYRange(0, 3.3)        # Trava o eixo Y
+            plot.setXRange(0, self.buffer_size) # Trava o eixo X
+            plot.setMouseEnabled(x=False, y=False) # Impede zoom manual pelo mouse
             
             curve = plot.plot(pen=pg.mkPen('y', width=2))
             
@@ -113,39 +116,35 @@ class SensorVisualizer3D(QWidget):
 
         # --- Atualiza Vetores 3D ---
         scale = 0.5 
-        
-        # Mestra (ax, ay, az)
-        mx, my, mz = raw.get('ax', 0), raw.get('ay', 0), raw.get('az', 0)
+        mx, my, mz = raw.get('gyro_ax', 0), raw.get('gyro_ay', 0), raw.get('gyro_az', 0)
         self.master_line.setData(pos=np.array([[0, 0, 0], [mx*scale, my*scale, mz*scale]]))
 
-        # Escrava (slave_ax ou slave_gx...)
-        sx = raw.get('slave_ax', raw.get('slave_gx', 0))
-        sy = raw.get('slave_ay', raw.get('slave_gy', 0))
-        sz = raw.get('slave_az', raw.get('slave_gz', 0))
+        sx = raw.get('slave_gx', 0)
+        sy = raw.get('slave_gy', 0)
+        sz = raw.get('slave_gz', 0)
         self.slave_line.setData(pos=np.array([[0, 0, 0], [sx*scale, sy*scale, sz*scale]]))
 
         # --- Atualiza Gráfico ADC e Linhas de Calibração ---
         mappings = self.main_app.sensor_mappings
 
         for i, curve in enumerate(self.adc_curves):
-            # 1. Dados do Sensor (Sua lógica)
-            # Nota: Certifique-se que sua struct envia adc_v1..v4 ou ajuste aqui
-            val = raw.get(f'adc_v{i+1}', 0) 
+            # 1. Pega valor direto (já está em 0-3.3 segundo você)
+            val = raw.get(f'adc_v{i+32}', 0) 
+            
             self.adc_data[i].append(val)
             curve.setData(self.adc_data[i])
 
-            # 2. Linhas de Calibração (Mantido para funcionar o pedido anterior)
+            # 2. Linhas de Calibração
             finger_name = self.finger_configs[i]["name"]
             if finger_name in mappings:
+                # Assumindo que a calibração salva TAMBÉM já está em volts
                 max_val = mappings[finger_name].get("full", 0)
-                # Atualiza posições
+                
                 self.threshold_lines[i][0].setPos(max_val * self.CONST_X)
                 self.threshold_lines[i][1].setPos(max_val * self.CONST_Y)
             else:
                 self.threshold_lines[i][0].setPos(0)
                 self.threshold_lines[i][1].setPos(0)
-
-
 # =============================================================================
 # CLASSES PRINCIPAIS
 # =============================================================================
