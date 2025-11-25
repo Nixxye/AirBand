@@ -29,6 +29,7 @@ from collections import deque
 
 
 class SensorVisualizer3D(QWidget):
+    # --- CONSTANTES DE CALIBRAÇÃO ---
     CONST_X = 0.5  # Linha Verde 2D
     CONST_Y = 0.8  # Linha Vermelha 2D
 
@@ -50,7 +51,6 @@ class SensorVisualizer3D(QWidget):
         self.view_3d.addItem(gl.GLAxisItem())
 
         # --- VETORES VIVOS (Linhas Sólidas) ---
-        # Mestra = Ciano, Escrava = Magenta
         self.master_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(0, 1, 1, 1), width=3, antialias=True)
         self.view_3d.addItem(self.master_line)
         
@@ -58,16 +58,14 @@ class SensorVisualizer3D(QWidget):
         self.view_3d.addItem(self.slave_line)
 
         # --- VETORES DE CALIBRAÇÃO (Pontilhados/Scatter) ---
-        # Usamos ScatterPlot para simular linha pontilhada
-        # Mestra: Up (Verde), Down (Vermelho)
-        self.master_ref_up = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(0, 1, 0, 0.8), size=5, pxMode=True)
-        self.master_ref_down = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(1, 0, 0, 0.8), size=5, pxMode=True)
+        # Tamanho aumentado para 8 e pxMode=True para garantir visibilidade
+        self.master_ref_up = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(0, 1, 0, 0.6), size=8, pxMode=True)
+        self.master_ref_down = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(1, 0, 0, 0.6), size=8, pxMode=True)
         self.view_3d.addItem(self.master_ref_up)
         self.view_3d.addItem(self.master_ref_down)
 
-        # Escrava: Up (Verde), Down (Vermelho)
-        self.slave_ref_up = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(0, 1, 0, 0.8), size=5, pxMode=True)
-        self.slave_ref_down = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(1, 0, 0, 0.8), size=5, pxMode=True)
+        self.slave_ref_up = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(0, 1, 0, 0.6), size=8, pxMode=True)
+        self.slave_ref_down = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(1, 0, 0, 0.6), size=8, pxMode=True)
         self.view_3d.addItem(self.slave_ref_up)
         self.view_3d.addItem(self.slave_ref_down)
 
@@ -95,7 +93,7 @@ class SensorVisualizer3D(QWidget):
             plot = pg.PlotWidget(title=config["label"])
             plot.showGrid(x=True, y=True, alpha=0.3)
             
-            # Zoom fixo
+            # Zoom fixo 0 - 3.3V
             plot.setYRange(0, 3.3)      
             plot.setXRange(0, self.buffer_size)
             plot.setMouseEnabled(x=False, y=False)
@@ -125,68 +123,71 @@ class SensorVisualizer3D(QWidget):
     def stop_timer(self):
         self.timer.stop()
 
-    def _make_dotted_line(self, x, y, z, steps=15):
-        """ Cria pontos interpolados entre (0,0,0) e (x,y,z) para simular linha pontilhada """
-        if x == 0 and y == 0 and z == 0:
-            return np.array([[0,0,0]])
+    def _make_dotted_line(self, x, y, z, steps=20):
+        """ Cria pontos interpolados float32 para OpenGL """
+        # Se o vetor for nulo (ou quase nulo), retorna vazio para esconder
+        if abs(x) < 0.1 and abs(y) < 0.1 and abs(z) < 0.1:
+            return np.empty((0, 3), dtype=np.float32)
+
+        xs = np.linspace(0, x, steps)
+        ys = np.linspace(0, y, steps)
+        zs = np.linspace(0, z, steps)
         
-        return np.array([
-            np.linspace(0, x, steps),
-            np.linspace(0, y, steps),
-            np.linspace(0, z, steps)
-        ]).transpose()
+        # Empilha e converte para float32 (Essencial para pyqtgraph opengl)
+        return np.column_stack((xs, ys, zs)).astype(np.float32)
 
     def update_visuals(self):
         raw = self.main_app.communication.get_latest_data()
         if not raw: return
         mappings = self.main_app.sensor_mappings
 
-        # --- ATUALIZA VETORES VIVOS ---
         scale = 0.5 
         
-        # Mestra (Live)
+        # --- MESTRA (Live) ---
         mx, my, mz = raw.get('gyro_ax', 0), raw.get('gyro_ay', 0), raw.get('gyro_az', 0)
         self.master_line.setData(pos=np.array([[0, 0, 0], [mx*scale, my*scale, mz*scale]]))
 
-        # Escrava (Live)
-        sx = raw.get('slave_ax', 0) # Usando Accel agora
+        # --- ESCRAVA (Live) ---
+        sx = raw.get('slave_ax', 0) 
         sy = raw.get('slave_ay', 0)
         sz = raw.get('slave_az', 0)
         self.slave_line.setData(pos=np.array([[0, 0, 0], [sx*scale, sy*scale, sz*scale]]))
 
-        # --- ATUALIZA VETORES DE CALIBRAÇÃO (Pontilhados) ---
+        # --- CALIBRAÇÃO (Pontilhada) ---
         
-        # 1. Mestra ("Batida (Mestra)")
+        # 1. Mestra
         if "Batida (Mestra)" in mappings:
             m_calib = mappings["Batida (Mestra)"]
             
-            # UP (Verde)
             up = m_calib.get("up", {})
             ux, uy, uz = up.get("ax", 0), up.get("ay", 0), up.get("az", 0)
             self.master_ref_up.setData(pos=self._make_dotted_line(ux*scale, uy*scale, uz*scale))
             
-            # DOWN (Vermelho)
             down = m_calib.get("down", {})
             dx, dy, dz = down.get("ax", 0), down.get("ay", 0), down.get("az", 0)
             self.master_ref_down.setData(pos=self._make_dotted_line(dx*scale, dy*scale, dz*scale))
+        else:
+            # Limpa se não calibrado
+            self.master_ref_up.setData(pos=np.empty((0, 3)))
+            self.master_ref_down.setData(pos=np.empty((0, 3)))
         
-        # 2. Escrava ("Batida (Escrava)")
+        # 2. Escrava
         if "Batida (Escrava)" in mappings:
             s_calib = mappings["Batida (Escrava)"]
             
-            # UP (Verde)
             up = s_calib.get("up", {})
             ux, uy, uz = up.get("ax", 0), up.get("ay", 0), up.get("az", 0)
             self.slave_ref_up.setData(pos=self._make_dotted_line(ux*scale, uy*scale, uz*scale))
             
-            # DOWN (Vermelho)
             down = s_calib.get("down", {})
             dx, dy, dz = down.get("ax", 0), down.get("ay", 0), down.get("az", 0)
             self.slave_ref_down.setData(pos=self._make_dotted_line(dx*scale, dy*scale, dz*scale))
+        else:
+            self.slave_ref_up.setData(pos=np.empty((0, 3)))
+            self.slave_ref_down.setData(pos=np.empty((0, 3)))
 
-        # --- ATUALIZA GRÁFICOS 2D ---
+        # --- GRÁFICOS 2D ---
         for i, curve in enumerate(self.adc_curves):
-            # Validação do índice: adc_v32 a adc_v35
             val = raw.get(f'adc_v{i+32}', 0) 
             self.adc_data[i].append(val)
             curve.setData(self.adc_data[i])
@@ -199,6 +200,7 @@ class SensorVisualizer3D(QWidget):
             else:
                 self.threshold_lines[i][0].setPos(0)
                 self.threshold_lines[i][1].setPos(0)
+
 # =============================================================================
 # CLASSES PRINCIPAIS
 # =============================================================================
