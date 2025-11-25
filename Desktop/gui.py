@@ -17,93 +17,31 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal, QPoint
 
-# --- Imports dos Módulos ---
+# --- Imports dos Módulos (Assumindo que existem no seu projeto) ---
 from communication import Communication
 from emulator import Emulator
 from instruments import Guitar, Drum
 from worker import InstrumentWorker
 
 # =============================================================================
-# WIDGETS DE VISUALIZAÇÃO (NOVOS)
+# WIDGETS DE VISUALIZAÇÃO
 # =============================================================================
 
-class GraphWidget(QWidget):
+class SingleGraphWidget(QWidget):
     """
-    Widget leve para plotar gráficos de linha em tempo real usando QPainter.
+    Widget para plotar UM gráfico de linha em tempo real.
     """
-    def __init__(self, num_channels=4, max_points=100, parent=None):
+    def __init__(self, color=Qt.green, max_points=100, title="", parent=None):
         super().__init__(parent)
-        self.num_channels = num_channels
+        self.color = color
         self.max_points = max_points
-        # Histórico de dados: lista de listas
-        self.data = [deque([0]*max_points, maxlen=max_points) for _ in range(num_channels)]
-        
-        # Cores para cada canal (Dedo 1 a 4)
-        self.colors = [Qt.red, Qt.green, Qt.cyan, Qt.yellow]
-        self.setMinimumHeight(150)
+        self.title = title
+        self.data = deque([0]*max_points, maxlen=max_points)
+        self.setMinimumHeight(120) 
         self.setStyleSheet("background-color: #111; border: 1px solid #333;")
 
-    def add_point(self, channel_index, value):
-        if 0 <= channel_index < self.num_channels:
-            self.data[channel_index].append(value)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        w = self.width()
-        h = self.height()
-        
-        # Desenha grid simples
-        painter.setPen(QPen(QColor(50, 50, 50), 1, Qt.DotLine))
-        painter.drawLine(0, h//2, w, h//2)
-        painter.drawLine(0, h//4, w, h//4)
-        painter.drawLine(0, h*3//4, w, h*3//4)
-
-        # Encontrar max/min para auto-escala (ou fixo se preferir)
-        # Vamos assumir ADC de 0 a 4095, escalando para a altura do widget
-        max_val = 4095
-        min_val = 0
-        
-        step_x = w / (self.max_points - 1)
-
-        for i in range(self.num_channels):
-            painter.setPen(QPen(self.colors[i], 2))
-            polyline = []
-            
-            points = list(self.data[i])
-            for j, val in enumerate(points):
-                x = j * step_x
-                # Normaliza Y: 0 embaixo, h em cima
-                if max_val - min_val == 0: normalized = 0
-                else: normalized = (val - min_val) / (max_val - min_val)
-                
-                y = h - (normalized * h)
-                polyline.append(QPoint(int(x), int(y)))
-            
-            if len(polyline) > 1:
-                painter.drawPolyline(QPolygon(polyline))
-
-
-class VectorWidget(QWidget):
-    """
-    Visualiza um vetor 3D. 
-    X/Y são mostrados como direção em um círculo.
-    Z é mostrado numa barra lateral.
-    """
-    def __init__(self, title="Vector", parent=None):
-        super().__init__(parent)
-        self.title = title
-        self.vec_x = 0
-        self.vec_y = 0
-        self.vec_z = 0
-        self.setMinimumSize(120, 120)
-        self.setStyleSheet("background-color: #222; border-radius: 5px;")
-
-    def update_vector(self, x, y, z):
-        self.vec_x = x
-        self.vec_y = y
-        self.vec_z = z
+    def add_point(self, value):
+        self.data.append(value)
         self.update()
 
     def paintEvent(self, event):
@@ -112,60 +50,79 @@ class VectorWidget(QWidget):
         w = self.width()
         h = self.height()
         
-        cx, cy = w // 2, h // 2
-        radius = min(w, h) // 2 - 10
+        # Título
+        if self.title:
+            painter.setPen(Qt.white)
+            painter.setFont(QFont("Arial", 8))
+            painter.drawText(5, 15, self.title)
 
-        # 1. Título
-        painter.setPen(Qt.white)
-        painter.setFont(QFont("Arial", 8))
+        # Grid
+        painter.setPen(QPen(QColor(50, 50, 50), 1, Qt.DotLine))
+        painter.drawLine(0, h//2, w, h//2)
+
+        # Plotagem
+        max_val = 4095
+        min_val = 0
+        step_x = w / (self.max_points - 1)
+        
+        painter.setPen(QPen(self.color, 2))
+        polyline = []
+        
+        for j, val in enumerate(self.data):
+            x = j * step_x
+            if max_val - min_val == 0: normalized = 0
+            else: normalized = (val - min_val) / (max_val - min_val)
+            y = h - (normalized * h)
+            polyline.append(QPoint(int(x), int(y)))
+        
+        if len(polyline) > 1:
+            painter.drawPolyline(QPolygon(polyline))
+
+
+class VectorWidget(QWidget):
+    """ Visualiza vetor 3D (Radar + Barra Z) """
+    def __init__(self, title="Vector", parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.vec_x = 0; self.vec_y = 0; self.vec_z = 0
+        self.setMinimumSize(120, 120)
+        self.setStyleSheet("background-color: #222; border-radius: 5px;")
+
+    def update_vector(self, x, y, z):
+        self.vec_x = x; self.vec_y = y; self.vec_z = z
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w = self.width(); h = self.height()
+        cx, cy = w // 2, h // 2
+        radius = min(w, h) // 2 - 15
+
+        # Título
+        painter.setPen(Qt.white); painter.setFont(QFont("Arial", 8))
         painter.drawText(5, 15, self.title)
 
-        # 2. Círculo Base (Plano X/Y)
-        painter.setPen(QPen(QColor(80, 80, 80), 2))
-        painter.setBrush(Qt.NoBrush)
+        # Círculo
+        painter.setPen(QPen(QColor(80, 80, 80), 2)); painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
-
-        # Eixos Cruzados
         painter.drawLine(cx, cy - radius, cx, cy + radius)
         painter.drawLine(cx - radius, cy, cx + radius, cy)
 
-        # 3. Vetor X/Y (Seta)
-        # Assumindo valores brutos de acelerômetro (~16000 max) ou float (~1.0)
-        # Normalização dinâmica simples para visualização
+        # Seta X/Y
         scale_factor = radius / 16000.0 if abs(self.vec_x) > 2.0 else radius / 2.0
-        
         end_x = cx + int(self.vec_x * scale_factor)
-        end_y = cy - int(self.vec_y * scale_factor) # Y invertido na tela
+        end_y = cy - int(self.vec_y * scale_factor)
+        painter.setPen(QPen(Qt.cyan, 3)); painter.drawLine(cx, cy, end_x, end_y)
+        painter.setBrush(QBrush(Qt.cyan)); painter.drawEllipse(end_x - 3, end_y - 3, 6, 6)
 
-        # Linha do vetor
-        painter.setPen(QPen(Qt.cyan, 3))
-        painter.drawLine(cx, cy, end_x, end_y)
-        # "Cabeça" da seta (círculo)
-        painter.setBrush(QBrush(Qt.cyan))
-        painter.drawEllipse(end_x - 3, end_y - 3, 6, 6)
-
-        # 4. Barra Z (Lateral direita)
-        bar_w = 10
-        bar_x = w - bar_w - 5
-        center_bar_y = h // 2
-        
-        # Fundo da barra
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(50, 50, 50))
-        painter.drawRect(bar_x, 5, bar_w, h - 10)
-
-        # Valor Z
+        # Barra Z
+        bar_x = w - 15; center_bar_y = h // 2
         z_height = int(self.vec_z * scale_factor)
-        # Limita visualmente
         z_height = max(-h//2 + 5, min(h//2 - 5, z_height))
-
         color_z = Qt.yellow if z_height >= 0 else Qt.magenta
-        painter.setBrush(color_z)
-        # Desenha a barra a partir do centro
-        painter.drawRect(bar_x, center_bar_y, bar_w, -z_height) # -height desenha pra cima
-
-        painter.setPen(Qt.white)
-        painter.drawText(bar_x - 20, center_bar_y, "Z")
+        painter.setBrush(color_z); painter.drawRect(bar_x, center_bar_y, 10, -z_height)
+        painter.setPen(Qt.white); painter.drawText(bar_x - 5, center_bar_y, "Z")
 
 
 # =============================================================================
@@ -173,39 +130,26 @@ class VectorWidget(QWidget):
 # =============================================================================
 
 class MainApplication(QMainWindow):
-    """
-    Classe principal da Interface (QMainWindow).
-    Gerencia UI e Thread de Processamento (Worker).
-    """
-
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Air Band 🤘 (Multi-Thread + Slave)")
-        self.setGeometry(100, 100, 1000, 750) # Aumentei um pouco a largura
+        self.setWindowTitle("Air Band 🤘 (Debug Completo)")
+        self.setGeometry(100, 100, 1100, 800)
 
         self.sensor_mappings = {}
         self.load_mappings_from_file()
 
-        # --- 1. Instancia a Lógica (Shared Resources) ---
+        # Threads e Lógica
         self.communication = Communication() 
         self.emulator = Emulator()           
         self.guitar = Guitar()
         self.drum = Drum()
-
-        # --- 2. Instancia e Inicia o WORKER ---
-        self.worker = InstrumentWorker(
-            self.communication, 
-            self.guitar, 
-            self.drum, 
-            self.emulator
-        )
+        
+        self.worker = InstrumentWorker(self.communication, self.guitar, self.drum, self.emulator)
         self.worker.update_mappings(self.sensor_mappings) 
         self.worker.start() 
 
-        # --- 3. Configuração da UI ---
+        # UI
         self.tabs = QTabWidget(self)
-        self.tabs.setMovable(True)
-
         self.instructions_tab = InstructionsScreen(self)
         self.main_menu_tab = MainMenuScreen(self)
         self.calibration_tab = CalibrationScreen(self)
@@ -213,90 +157,182 @@ class MainApplication(QMainWindow):
         self.tabs.addTab(self.instructions_tab, "🏠 Início")
         self.tabs.addTab(self.main_menu_tab, "⚙️ Controle")
         self.tabs.addTab(self.calibration_tab, "🎛️ Calibração")
-
         self.setCentralWidget(self.tabs)
-        self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        # --- 4. Timers da Interface ---
+        # Timers
         self.ui_timer = QTimer(self)
         self.ui_timer.timeout.connect(self.update_ui_visuals)
         self.ui_timer.start(30) 
-
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._check_network_status)
         self.status_timer.start(500)
 
-        self._check_network_status()
-        self.on_tab_changed(self.tabs.currentIndex())
-
-    def on_tab_changed(self, index):
-        current_widget = self.tabs.widget(index)
-        if current_widget == self.calibration_tab:
-            self.calibration_tab.start_timer()
-        else:
-            self.calibration_tab.stop_timer()
-
-    # ============ Funções de Controle ============
     def load_mappings_from_file(self):
         try:
             with open('sensor_mappings.json', 'r') as f:
                 self.sensor_mappings = json.load(f)
-                print("Mapeamentos carregados.")
-        except FileNotFoundError:
-            print("Arquivo 'sensor_mappings.json' não encontrado.")
-            self.sensor_mappings = {}
-        except json.JSONDecodeError:
-            self.sensor_mappings = {}
+        except: self.sensor_mappings = {}
 
     def save_mappings_to_file(self):
         try:
             with open('sensor_mappings.json', 'w') as f:
                 json.dump(self.sensor_mappings, f, indent=4)
-                print(f"Mapeamentos salvos.")
-            if hasattr(self, 'worker'):
-                self.worker.update_mappings(self.sensor_mappings)
-        except Exception as e:
-            print(f"Erro ao salvar mapeamentos: {e}")
+            self.worker.update_mappings(self.sensor_mappings)
+        except Exception as e: print(e)
 
     def toggle_glove_connection(self):
         self.communication.toggle_connection()
 
     def _check_network_status(self):
-        status = self.communication.get_status_message()
-        is_connected = self.communication.connected
-        self.main_menu_tab.update_connection_status(is_connected, status)
+        self.main_menu_tab.update_connection_status(self.communication.connected, self.communication.get_status_message())
 
     def update_ui_visuals(self):
-        # Obtém dados para mostrar na tela
-        raw_data = self.communication.get_latest_data()
-        self.main_menu_tab.update_sensor_data(raw_data)
+        self.main_menu_tab.update_sensor_data(self.communication.get_latest_data())
 
     def closeEvent(self, event):
-        if hasattr(self, 'worker'):
-            self.worker.stop() 
-        self.communication.connected = False 
-        self.emulator.fechar() 
+        self.worker.stop()
+        self.communication.connected = False
+        self.emulator.fechar()
         event.accept()
 
-
+# Telas Auxiliares
 class Screen(QWidget):
     def __init__(self, parent):
-        super().__init__(parent)
-        self.main_app = parent
-
+        super().__init__(parent); self.main_app = parent
 
 class InstructionsScreen(Screen):
     def __init__(self, parent):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20) 
-        layout.addWidget(QLabel("<h2>Bem-vindo ao Air Band 🤘</h2>"))
-        layout.addWidget(QLabel("Instruções simplificadas na aba Início..."))
-        layout.addStretch()
-        self.continue_btn = QPushButton("Ir para a Aba de Controle ➡️")
-        self.continue_btn.clicked.connect(lambda: self.main_app.tabs.setCurrentWidget(self.main_app.main_menu_tab))
-        layout.addWidget(self.continue_btn)
-        self.setLayout(layout)
+        layout.addWidget(QLabel("<h2>Instruções</h2><p>Conecte a luva na aba Controle.</p>"))
+        self.btn = QPushButton("Ir para Controle")
+        self.btn.clicked.connect(lambda: self.main_app.tabs.setCurrentIndex(1))
+        layout.addWidget(self.btn)
+
+class MainMenuScreen(Screen):
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        main_layout = QHBoxLayout(self)
+        
+        # --- ESQUERDA: Controles ---
+        left_column = QVBoxLayout()
+        
+        # Grupo Config
+        g_config = QGroupBox("Configuração")
+        l_conf = QFormLayout(g_config)
+        self.cb_inst = QComboBox(); self.cb_inst.addItems(["Guitarra", "Bateria"])
+        self.cb_out = QComboBox(); self.cb_out.addItems(["Joystick", "Teclado"])
+        self.cb_out.currentTextChanged.connect(self.change_emul)
+        l_conf.addRow("Instrumento:", self.cb_inst)
+        l_conf.addRow("Saída:", self.cb_out)
+        left_column.addWidget(g_config)
+
+        # Grupo Guitarra
+        g_guitar = QGroupBox("Guitarra")
+        l_guit = QVBoxLayout(g_guitar)
+        self.btn_conn = QPushButton("Conectar Luva")
+        self.btn_conn.clicked.connect(self.main_app.toggle_glove_connection)
+        self.lbl_status = QLabel("Desconectado")
+        l_guit.addWidget(self.btn_conn); l_guit.addWidget(self.lbl_status)
+        left_column.addWidget(g_guitar)
+
+        # Grupo Bateria
+        g_drum = QGroupBox("Bateria")
+        l_drum = QVBoxLayout(g_drum)
+        self.btn_cam = QPushButton("Câmera")
+        self.btn_cam.clicked.connect(self.toggle_cam)
+        l_drum.addWidget(self.btn_cam)
+        left_column.addWidget(g_drum)
+        
+        left_column.addStretch()
+        main_layout.addLayout(left_column, 1)
+
+        # --- DIREITA: Debug (Com ScrollArea) ---
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_content = QWidget()
+        right_layout = QVBoxLayout(right_content)
+
+        self.debug_group = QGroupBox("Monitoramento em Tempo Real")
+        self.debug_group.setCheckable(True); self.debug_group.setChecked(True)
+        d_layout = QVBoxLayout(self.debug_group)
+
+        # 1. Terminal Completo (QTextEdit)
+        d_layout.addWidget(QLabel("<b>Terminal (Todos os Valores):</b>"))
+        self.terminal = QTextEdit()
+        self.terminal.setReadOnly(True)
+        self.terminal.setFixedHeight(150) # Altura fixa para não crescer demais
+        self.terminal.setStyleSheet("font-family: Consolas; font-size: 10px; background: #000; color: #0f0;")
+        d_layout.addWidget(self.terminal)
+
+        # 2. Gráficos Individuais (4 Dedos)
+        d_layout.addWidget(QLabel("<b>Sensores dos Dedos:</b>"))
+        
+        self.graph_d1 = SingleGraphWidget(color=Qt.red, title="Dedo 1 (Indicador)")
+        d_layout.addWidget(self.graph_d1)
+        
+        self.graph_d2 = SingleGraphWidget(color=Qt.green, title="Dedo 2 (Médio)")
+        d_layout.addWidget(self.graph_d2)
+        
+        self.graph_d3 = SingleGraphWidget(color=Qt.cyan, title="Dedo 3 (Anelar)")
+        d_layout.addWidget(self.graph_d3)
+        
+        self.graph_d4 = SingleGraphWidget(color=Qt.yellow, title="Dedo 4 (Mindinho)")
+        d_layout.addWidget(self.graph_d4)
+
+        # 3. Vetores
+        d_layout.addWidget(QLabel("<b>Acelerômetros / Giroscópios:</b>"))
+        vec_layout = QHBoxLayout()
+        self.vec_mestra = VectorWidget("Mestra")
+        self.vec_slave = VectorWidget("Slave")
+        vec_layout.addWidget(self.vec_mestra)
+        vec_layout.addWidget(self.vec_slave)
+        d_layout.addLayout(vec_layout)
+
+        # 4. Câmera
+        self.cam_widget = CameraWidget()
+        self.cam_widget.setFixedHeight(200)
+        d_layout.addWidget(QLabel("<b>Retorno Câmera:</b>"))
+        d_layout.addWidget(self.cam_widget)
+
+        right_layout.addWidget(self.debug_group)
+        right_scroll.setWidget(right_content)
+        main_layout.addWidget(right_scroll, 2)
+
+        self.setLayout(main_layout)
+
+    def change_emul(self, t):
+        self.main_app.emulator.set_tipo_emulacao(Emulator.TIPO_CONTROLE if t == "Joystick" else Emulator.TIPO_TECLADO)
+
+    def update_connection_status(self, connected, msg):
+        self.lbl_status.setText(msg)
+        self.btn_conn.setText("Desconectar" if connected else "Conectar")
+
+    def toggle_cam(self):
+        if self.cam_widget.cap: self.cam_widget.stop_cam()
+        else: self.cam_widget.start_cam()
+
+    def update_sensor_data(self, data):
+        if not self.debug_group.isChecked() or not data: return
+        
+        # 1. Terminal: Formata string com TODOS os dados
+        text_lines = [f"{k}: {v}" for k, v in sorted(data.items())]
+        self.terminal.setText(" | ".join(text_lines))
+
+        # 2. Gráficos
+        self.graph_d1.add_point(data.get('adc_1', 0))
+        self.graph_d2.add_point(data.get('adc_2', 0))
+        self.graph_d3.add_point(data.get('adc_3', 0))
+        self.graph_d4.add_point(data.get('adc_4', 0))
+
+        # 3. Vetores
+        self.vec_mestra.update_vector(data.get('ax', 0), data.get('ay', 0), data.get('az', 0))
+        self.vec_slave.update_vector(
+            data.get('slave_ax', data.get('slave_gx', 0)), 
+            data.get('slave_ay', data.get('slave_gy', 0)), 
+            data.get('slave_az', data.get('slave_gz', 0))
+        )
 
 
 class CalibrationScreen(Screen):
@@ -424,159 +460,6 @@ class CalibrationScreen(Screen):
 
     def cancel_wizard(self):
         self.stack.setCurrentWidget(self.main_menu_widget)
-
-
-class MainMenuScreen(Screen):
-    """ Tela Principal (Aba 'Controle'). """
-    def __init__(self, parent):
-        super().__init__(parent)
-
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-
-        # --- Coluna da Esquerda (Controles) ---
-        left_column = QVBoxLayout()
-        
-        # Config
-        config_group = QGroupBox("Configuração")
-        config_layout = QFormLayout(config_group)
-        self.instrument_combo = QComboBox()
-        self.instrument_combo.addItems(["Guitarra (Luva)", "Bateria (Camera)"])
-        config_layout.addRow("Instrumento:", self.instrument_combo)
-        self.output_combo = QComboBox()
-        self.output_combo.addItems(["Joystick", "Teclado"])
-        self.output_combo.currentTextChanged.connect(self.change_emulator_type)
-        config_layout.addRow("Saída:", self.output_combo)
-        left_column.addWidget(config_group)
-
-        # Guitarra
-        guitar_group = QGroupBox("Guitarra 🎸")
-        guitar_layout = QVBoxLayout(guitar_group)
-        self.connect_glove_btn = QPushButton("Conectar à Luva")
-        self.connect_glove_btn.clicked.connect(self.main_app.toggle_glove_connection)
-        guitar_layout.addWidget(self.connect_glove_btn)
-        self.status_label = QLabel("Status: Desconectado")
-        guitar_layout.addWidget(self.status_label)
-        left_column.addWidget(guitar_group)
-
-        # Bateria
-        drum_group = QGroupBox("Bateria 🥁")
-        drum_layout = QVBoxLayout(drum_group)
-        self.camera_feedback_btn = QPushButton("Ver Câmera")
-        self.camera_feedback_btn.clicked.connect(self.toggle_camera_feedback)
-        drum_layout.addWidget(self.camera_feedback_btn)
-        left_column.addWidget(drum_group)
-
-        left_column.addStretch()
-        main_layout.addLayout(left_column, 1)
-
-        # --- Coluna da Direita (Debug AVANÇADO) ---
-        right_column = QVBoxLayout()
-        
-        self.debug_group = QGroupBox("Terminal e Sensores")
-        self.debug_group.setCheckable(True)
-        self.debug_group.setChecked(True)
-        
-        debug_layout = QVBoxLayout(self.debug_group)
-
-        # 1. Valores em Texto (Compacto)
-        self.sensor_text = QLabel("Aguardando dados...")
-        self.sensor_text.setStyleSheet("font-family: Consolas; font-size: 10px; color: #0f0;")
-        self.sensor_text.setWordWrap(True)
-        self.sensor_text.setFixedHeight(60)
-        debug_layout.addWidget(self.sensor_text)
-
-        # 2. Gráfico dos Dedos (ADC)
-        debug_layout.addWidget(QLabel("<b>Tensões dos Dedos (Tempo):</b>"))
-        self.finger_graph = GraphWidget(num_channels=4, max_points=100)
-        debug_layout.addWidget(self.finger_graph)
-
-        # 3. Visualização Vetorial (Giroscópios)
-        vectors_layout = QHBoxLayout()
-        
-        # Mestra
-        v_layout_1 = QVBoxLayout()
-        v_layout_1.addWidget(QLabel("Mestra (Acel)"))
-        self.vector_mestra = VectorWidget("Mestra")
-        v_layout_1.addWidget(self.vector_mestra)
-        vectors_layout.addLayout(v_layout_1)
-
-        # Escrava
-        v_layout_2 = QVBoxLayout()
-        v_layout_2.addWidget(QLabel("Escrava (Acel/Gyro)"))
-        self.vector_slave = VectorWidget("Slave")
-        v_layout_2.addWidget(self.vector_slave)
-        vectors_layout.addLayout(v_layout_2)
-
-        debug_layout.addLayout(vectors_layout)
-
-        right_column.addWidget(self.debug_group)
-
-        # Widget Câmera
-        self.camera_widget = CameraWidget(self)
-        self.camera_widget.camera_data_signal.connect(self.update_camera_data)
-        camera_frame = QGroupBox("Câmera Feedback")
-        cam_layout = QVBoxLayout(camera_frame)
-        cam_layout.addWidget(self.camera_widget)
-        right_column.addWidget(camera_frame)
-
-        main_layout.addLayout(right_column, 2)
-        self.setLayout(main_layout)
-
-    def change_emulator_type(self, text):
-        tipo = Emulator.TIPO_CONTROLE if text == "Joystick" else Emulator.TIPO_TECLADO
-        self.main_app.emulator.set_tipo_emulacao(tipo)
-
-    def update_sensor_data(self, raw_data):
-        if not self.debug_group.isChecked() or not raw_data:
-            return
-
-        # 1. Atualizar Texto
-        texto = ""
-        count = 0
-        for k, v in raw_data.items():
-            if count > 8: break # Mostrar apenas os primeiros para nao poluir
-            if isinstance(v, float): texto += f"{k}: {v:.0f} | "
-            else: texto += f"{k}: {v} | "
-            count += 1
-        self.sensor_text.setText(texto)
-
-        # 2. Atualizar Gráfico dos Dedos
-        # Assumindo chaves adc_1, adc_2, adc_3, adc_4
-        self.finger_graph.add_point(0, raw_data.get('adc_1', 0))
-        self.finger_graph.add_point(1, raw_data.get('adc_2', 0))
-        self.finger_graph.add_point(2, raw_data.get('adc_3', 0))
-        self.finger_graph.add_point(3, raw_data.get('adc_4', 0))
-        self.finger_graph.update()
-
-        # 3. Atualizar Vetores
-        # Mestra (Acelerometro ax, ay, az)
-        ax = raw_data.get('ax', 0)
-        ay = raw_data.get('ay', 0)
-        az = raw_data.get('az', 0)
-        self.vector_mestra.update_vector(ax, ay, az)
-
-        # Slave (Geralmente slave_ax ou slave_gx)
-        # Tenta pegar slave_ax, se não existir pega slave_gx
-        sax = raw_data.get('slave_ax', raw_data.get('slave_gx', 0))
-        say = raw_data.get('slave_ay', raw_data.get('slave_gy', 0))
-        saz = raw_data.get('slave_az', raw_data.get('slave_gz', 0))
-        self.vector_slave.update_vector(sax, say, saz)
-
-    def update_connection_status(self, is_connected, status_message):
-        self.status_label.setText(f"Status: {status_message}")
-        self.connect_glove_btn.setText("Desconectar" if is_connected else "Conectar")
-
-    def toggle_camera_feedback(self):
-        if self.camera_widget.cap and self.camera_widget.cap.isOpened():
-            self.camera_widget.stop_camera()
-        else:
-            self.camera_widget.start_camera()
-
-    def update_camera_data(self, data):
-        # Opcional: misturar dados da câmera no texto se quiser
-        pass
-
 
 # =======================================================================
 # --- LÓGICA DA CÂMERA INTEGRADA (PyQt + OpenCV + MediaPipe) ---
