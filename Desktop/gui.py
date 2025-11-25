@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QComboBox, QTextEdit, QSlider,
     QCheckBox, QStackedWidget, QFormLayout,
     QScrollArea, QLineEdit, QMessageBox,
-    QGroupBox, QFrame, QTabWidget, QMainWindow, QApplication
+    QGroupBox, QFrame, QTabWidget, QMainWindow, QApplication, QGridLayout
 )
 from PyQt5.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 
@@ -29,54 +29,97 @@ from collections import deque
 
 
 class SensorVisualizer3D(QWidget):
+    # --- CONSTANTES DE CALIBRAÇÃO (Ajuste conforme sua necessidade) ---
+    CONST_X = 0.10
+    CONST_Y = 0.40
+
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
         
-        layout = QVBoxLayout(self)
+        # Layout Principal (Vertical)
+        main_layout = QVBoxLayout(self)
 
-        # --- 1. Visualização 3D (Vetores) ---
+        # ==========================================================
+        # 1. ÁREA 3D (VETORES) - Topo
+        # ==========================================================
         self.view_3d = gl.GLViewWidget()
-        self.view_3d.opts['distance'] = 20  # Distância da câmera
+        self.view_3d.opts['distance'] = 20
         self.view_3d.setWindowTitle('Vetores de Aceleração')
-        self.view_3d.setGeometry(0, 110, 1920, 1080)
+        self.view_3d.setFixedHeight(400) # Fixa altura para sobrar espaço para os gráficos
 
-        # Grades e Eixos para referência
         gz = gl.GLGridItem()
         gz.translate(0, 0, -1)
         self.view_3d.addItem(gz)
         self.view_3d.addItem(gl.GLAxisItem())
 
-        # Vetor Mestra (Ciano)
+        # Vetores
         self.master_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(0, 1, 1, 1), width=3, antialias=True)
         self.view_3d.addItem(self.master_line)
         
-        # Vetor Escrava (Magenta)
         self.slave_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(1, 0, 1, 1), width=3, antialias=True)
         self.view_3d.addItem(self.slave_line)
 
-        layout.addWidget(self.view_3d, stretch=2) # Ocupa 2/3 da tela
+        main_layout.addWidget(self.view_3d)
 
-        # --- 2. Gráfico de Linha (ADCs) ---
-        self.plot_adc = pg.PlotWidget(title="Flexão dos Dedos (ADC)")
-        self.plot_adc.addLegend()
-        self.adc_curves = [
-            self.plot_adc.plot(pen='y', name='D1'),
-            self.plot_adc.plot(pen='c', name='D2'),
-            self.plot_adc.plot(pen='m', name='D3'),
-            self.plot_adc.plot(pen='w', name='D4')
-        ]
-        layout.addWidget(self.plot_adc, stretch=1) # Ocupa 1/3 da tela
-
-        # Buffers
-        self.buffer_size = 100
-        self.adc_data = [deque([0]*self.buffer_size, maxlen=self.buffer_size) for _ in range(4)]
+        # ==========================================================
+        # 2. ÁREA 2D (GRÁFICOS INDIVIDUAIS DOS DEDOS) - Base
+        # ==========================================================
         
+        # Grid 2x2 para os 4 dedos
+        adc_grid = QGridLayout()
+        main_layout.addLayout(adc_grid)
+
+        # Configurações dos dedos
+        self.finger_configs = [
+            {"name": "Dedo 1 (Indicador)", "key": "adc_v32", "label": "D1: Indicador"},
+            {"name": "Dedo 2 (Médio)",     "key": "adc_v33", "label": "D2: Médio"},
+            {"name": "Dedo 3 (Anelar)",    "key": "adc_v34", "label": "D3: Anelar"},
+            {"name": "Dedo 4 (Mindinho)",  "key": "adc_v35", "label": "D4: Mindinho"},
+        ]
+
+        self.adc_plots = []      # Lista para guardar os widgets de plot
+        self.adc_curves = []     # Lista para as curvas de sinal
+        self.threshold_lines = [] # Lista para guardar as linhas de calibração (pares)
+        
+        self.buffer_size = 100
+        self.adc_buffers = [deque([0]*self.buffer_size, maxlen=self.buffer_size) for _ in range(4)]
+
+        # Criação dos 4 gráficos num loop
+        for i, config in enumerate(self.finger_configs):
+            # Cria Widget de Plot
+            plot = pg.PlotWidget(title=config["label"])
+            plot.showGrid(x=True, y=True, alpha=0.3)
+            plot.setYRange(0, 4100) # Faixa fixa do ESP32 (0 a 4095) ajuda a visualizar melhor
+            
+            # Curva do Sinal (Amarela)
+            curve = plot.plot(pen=pg.mkPen('y', width=2))
+            
+            # --- Linhas de Calibração ---
+            # Linha X (Verde - tracejada)
+            line_x = pg.InfiniteLine(angle=0, pen=pg.mkPen('g', style=pg.QtCore.Qt.DashLine, width=1))
+            
+            # Linha Y (Vermelha - tracejada)
+            line_y = pg.InfiniteLine(angle=0, pen=pg.mkPen('r', style=pg.QtCore.Qt.DashLine, width=1))
+            
+            plot.addItem(line_x)
+            plot.addItem(line_y)
+
+            # Adiciona ao Grid (2 por linha)
+            row = i // 2
+            col = i % 2
+            adc_grid.addWidget(plot, row, col)
+
+            # Armazena referências
+            self.adc_plots.append(plot)
+            self.adc_curves.append(curve)
+            self.threshold_lines.append((line_x, line_y))
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_visuals)
 
     def start_timer(self):
-        self.timer.start(30) # ~30 FPS
+        self.timer.start(30)
 
     def stop_timer(self):
         self.timer.stop()
@@ -85,25 +128,54 @@ class SensorVisualizer3D(QWidget):
         raw = self.main_app.communication.get_latest_data()
         if not raw: return
 
-        # --- Atualiza Vetores 3D ---
-        # Fator de escala visual (ajuste conforme a sensibilidade do seu sensor)
-        scale = 0.5 
+        # --- ATUALIZAÇÃO 3D (Vetores) ---
+        scale = 1.0 / 1000.0
         
-        # Mestra (ax, ay, az)
-        mx, my, mz = raw.get('ax', 0), raw.get('ay', 0), raw.get('az', 0)
-        self.master_line.setData(pos=np.array([[0, 0, 0], [mx*scale, my*scale, mz*scale]]))
+        # Mestra
+        mx = raw.get('gyro_ax', 0) * scale
+        my = raw.get('gyro_ay', 0) * scale
+        mz = raw.get('gyro_az', 0) * scale
+        self.master_line.setData(pos=np.array([[0, 0, 0], [mx, my, mz]]))
 
-        # Escrava (slave_ax ou slave_gx...)
-        sx = raw.get('slave_ax', raw.get('slave_gx', 0))
-        sy = raw.get('slave_ay', raw.get('slave_gy', 0))
-        sz = raw.get('slave_az', raw.get('slave_gz', 0))
-        self.slave_line.setData(pos=np.array([[0, 0, 0], [sx*scale, sy*scale, sz*scale]]))
+        # Escrava
+        sx = raw.get('slave_gx', 0) * scale
+        sy = raw.get('slave_gy', 0) * scale
+        sz = raw.get('slave_gz', 0) * scale
+        self.slave_line.setData(pos=np.array([[0, 0, 0], [sx, sy, sz]]))
 
-        # --- Atualiza Gráfico ADC ---
-        for i, curve in enumerate(self.adc_curves):
-            val = raw.get(f'adc_{i+1}', 0)
-            self.adc_data[i].append(val)
-            curve.setData(self.adc_data[i])
+        # --- ATUALIZAÇÃO 2D (Gráficos Individuais) ---
+        mappings = self.main_app.sensor_mappings
+
+        for i, config in enumerate(self.finger_configs):
+            # 1. Atualiza Sinal Real
+            val = raw.get(config["key"], 0)
+            self.adc_buffers[i].append(val)
+            self.adc_curves[i].setData(self.adc_buffers[i])
+
+            # 2. Atualiza Linhas de Calibração (Se houver calibração salva)
+            # Verifica se existe calibração para este dedo específico
+            finger_map_name = config["name"]
+            
+            if finger_map_name in mappings:
+                # Pega o valor 'full' (calibração de dedo pressionado)
+                # Nota: Seu json salva como "full": valor
+                max_val = mappings[finger_map_name].get("full", 0)
+                print(f"Calibração {finger_map_name}: full = {max_val}")
+                
+                # Calcula posições
+                pos_x = max_val * self.CONST_X
+                pos_y = max_val * self.CONST_Y
+                
+                # Atualiza posição das linhas
+                line_x, line_y = self.threshold_lines[i]
+                line_x.setPos(pos_x)
+                line_y.setPos(pos_y)
+                
+                # Opcional: Mostra valor se mouse passar (não implementado aqui para performance)
+            else:
+                # Se não calibrado, linhas ficam no zero
+                self.threshold_lines[i][0].setPos(0)
+                self.threshold_lines[i][1].setPos(0)
 # =============================================================================
 # CLASSES PRINCIPAIS
 # =============================================================================
