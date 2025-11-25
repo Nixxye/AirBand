@@ -13,7 +13,7 @@ class Drum(Instrument):
     def __init__(self):
         super().__init__()
 
-    def process_data(self, camera_data, mappings, emulator):
+    def process_data(self, logical_data, camera_data, mappings, emulator):
         # Lógica futura da bateria
         pass
 

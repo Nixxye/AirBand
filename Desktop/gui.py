@@ -29,9 +29,8 @@ from collections import deque
 
 
 class SensorVisualizer3D(QWidget):
-    # --- CONSTANTES DE CALIBRAÇÃO ---
-    CONST_X = 0.5  # Linha Verde (50% do máximo)
-    CONST_Y = 0.8  # Linha Vermelha (80% do máximo)
+    CONST_X = 0.5  # Linha Verde 2D
+    CONST_Y = 0.8  # Linha Vermelha 2D
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -50,11 +49,27 @@ class SensorVisualizer3D(QWidget):
         self.view_3d.addItem(gz)
         self.view_3d.addItem(gl.GLAxisItem())
 
+        # --- VETORES VIVOS (Linhas Sólidas) ---
+        # Mestra = Ciano, Escrava = Magenta
         self.master_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(0, 1, 1, 1), width=3, antialias=True)
         self.view_3d.addItem(self.master_line)
         
         self.slave_line = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,0]]), color=(1, 0, 1, 1), width=3, antialias=True)
         self.view_3d.addItem(self.slave_line)
+
+        # --- VETORES DE CALIBRAÇÃO (Pontilhados/Scatter) ---
+        # Usamos ScatterPlot para simular linha pontilhada
+        # Mestra: Up (Verde), Down (Vermelho)
+        self.master_ref_up = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(0, 1, 0, 0.8), size=5, pxMode=True)
+        self.master_ref_down = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(1, 0, 0, 0.8), size=5, pxMode=True)
+        self.view_3d.addItem(self.master_ref_up)
+        self.view_3d.addItem(self.master_ref_down)
+
+        # Escrava: Up (Verde), Down (Vermelho)
+        self.slave_ref_up = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(0, 1, 0, 0.8), size=5, pxMode=True)
+        self.slave_ref_down = gl.GLScatterPlotItem(pos=np.array([[0,0,0]]), color=(1, 0, 0, 0.8), size=5, pxMode=True)
+        self.view_3d.addItem(self.slave_ref_up)
+        self.view_3d.addItem(self.slave_ref_down)
 
         main_layout.addWidget(self.view_3d)
 
@@ -80,10 +95,10 @@ class SensorVisualizer3D(QWidget):
             plot = pg.PlotWidget(title=config["label"])
             plot.showGrid(x=True, y=True, alpha=0.3)
             
-            # --- CONFIGURAÇÃO DE ZOOM FIXO (0 a 3.3V) ---
-            plot.setYRange(0, 3.3)        # Trava o eixo Y
-            plot.setXRange(0, self.buffer_size) # Trava o eixo X
-            plot.setMouseEnabled(x=False, y=False) # Impede zoom manual pelo mouse
+            # Zoom fixo
+            plot.setYRange(0, 3.3)      
+            plot.setXRange(0, self.buffer_size)
+            plot.setMouseEnabled(x=False, y=False)
             
             curve = plot.plot(pen=pg.mkPen('y', width=2))
             
@@ -110,36 +125,75 @@ class SensorVisualizer3D(QWidget):
     def stop_timer(self):
         self.timer.stop()
 
+    def _make_dotted_line(self, x, y, z, steps=15):
+        """ Cria pontos interpolados entre (0,0,0) e (x,y,z) para simular linha pontilhada """
+        if x == 0 and y == 0 and z == 0:
+            return np.array([[0,0,0]])
+        
+        return np.array([
+            np.linspace(0, x, steps),
+            np.linspace(0, y, steps),
+            np.linspace(0, z, steps)
+        ]).transpose()
+
     def update_visuals(self):
         raw = self.main_app.communication.get_latest_data()
         if not raw: return
+        mappings = self.main_app.sensor_mappings
 
-        # --- Atualiza Vetores 3D ---
+        # --- ATUALIZA VETORES VIVOS ---
         scale = 0.5 
+        
+        # Mestra (Live)
         mx, my, mz = raw.get('gyro_ax', 0), raw.get('gyro_ay', 0), raw.get('gyro_az', 0)
         self.master_line.setData(pos=np.array([[0, 0, 0], [mx*scale, my*scale, mz*scale]]))
 
-        sx = raw.get('slave_gx', 0)
-        sy = raw.get('slave_gy', 0)
-        sz = raw.get('slave_gz', 0)
+        # Escrava (Live)
+        sx = raw.get('slave_ax', 0) # Usando Accel agora
+        sy = raw.get('slave_ay', 0)
+        sz = raw.get('slave_az', 0)
         self.slave_line.setData(pos=np.array([[0, 0, 0], [sx*scale, sy*scale, sz*scale]]))
 
-        # --- Atualiza Gráfico ADC e Linhas de Calibração ---
-        mappings = self.main_app.sensor_mappings
-
-        for i, curve in enumerate(self.adc_curves):
-            # 1. Pega valor direto (já está em 0-3.3 segundo você)
-            val = raw.get(f'adc_v{i+32}', 0) 
+        # --- ATUALIZA VETORES DE CALIBRAÇÃO (Pontilhados) ---
+        
+        # 1. Mestra ("Batida (Mestra)")
+        if "Batida (Mestra)" in mappings:
+            m_calib = mappings["Batida (Mestra)"]
             
+            # UP (Verde)
+            up = m_calib.get("up", {})
+            ux, uy, uz = up.get("ax", 0), up.get("ay", 0), up.get("az", 0)
+            self.master_ref_up.setData(pos=self._make_dotted_line(ux*scale, uy*scale, uz*scale))
+            
+            # DOWN (Vermelho)
+            down = m_calib.get("down", {})
+            dx, dy, dz = down.get("ax", 0), down.get("ay", 0), down.get("az", 0)
+            self.master_ref_down.setData(pos=self._make_dotted_line(dx*scale, dy*scale, dz*scale))
+        
+        # 2. Escrava ("Batida (Escrava)")
+        if "Batida (Escrava)" in mappings:
+            s_calib = mappings["Batida (Escrava)"]
+            
+            # UP (Verde)
+            up = s_calib.get("up", {})
+            ux, uy, uz = up.get("ax", 0), up.get("ay", 0), up.get("az", 0)
+            self.slave_ref_up.setData(pos=self._make_dotted_line(ux*scale, uy*scale, uz*scale))
+            
+            # DOWN (Vermelho)
+            down = s_calib.get("down", {})
+            dx, dy, dz = down.get("ax", 0), down.get("ay", 0), down.get("az", 0)
+            self.slave_ref_down.setData(pos=self._make_dotted_line(dx*scale, dy*scale, dz*scale))
+
+        # --- ATUALIZA GRÁFICOS 2D ---
+        for i, curve in enumerate(self.adc_curves):
+            # Validação do índice: adc_v32 a adc_v35
+            val = raw.get(f'adc_v{i+32}', 0) 
             self.adc_data[i].append(val)
             curve.setData(self.adc_data[i])
 
-            # 2. Linhas de Calibração
             finger_name = self.finger_configs[i]["name"]
             if finger_name in mappings:
-                # Assumindo que a calibração salva TAMBÉM já está em volts
                 max_val = mappings[finger_name].get("full", 0)
-                
                 self.threshold_lines[i][0].setPos(max_val * self.CONST_X)
                 self.threshold_lines[i][1].setPos(max_val * self.CONST_Y)
             else:
@@ -353,7 +407,7 @@ class CalibrationScreen(Screen):
         
         self.logical_actions = [
             "Dedo 1 (Indicador)", "Dedo 2 (Médio)", "Dedo 3 (Anelar)", "Dedo 4 (Mindinho)",
-            "Batida (Giroscópio)"
+            "Batida (Mestra)", "Batida (Escrava)"
         ]
 
         self.is_recording_peak = False
@@ -376,7 +430,7 @@ class CalibrationScreen(Screen):
         self.wizard_widget = self._create_wizard_widget()
         self.stack.addWidget(self.wizard_widget)
 
-        # --- Área de Dados Brutos (Sempre visível) ---
+        # --- Área de Dados Brutos ---
         main_layout.addWidget(QLabel("<b>Dados Brutos (Tempo Real):</b>"))
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
@@ -385,7 +439,6 @@ class CalibrationScreen(Screen):
 
         self.setLayout(main_layout)
 
-        # Timer para atualizar dados
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_sensor_data)
 
@@ -464,7 +517,6 @@ class CalibrationScreen(Screen):
             return
 
         texto = ""
-        # Mostra apenas dados relevantes (ADC, Gyro Mestra, Gyro Slave)
         for key, value in sorted(raw_data.items()):
             if "adc" in key or "gyro" in key or "slave" in key:
                 if isinstance(value, (float)):
@@ -473,23 +525,18 @@ class CalibrationScreen(Screen):
                     texto += f"<span style='color:#00FFFF;'>{key}:</span> {value}\n"
         self.sensor_output.setHtml(texto)
 
-        # LÓGICA DE CAPTURA DO PICO (BATIDA - CIMA ou BAIXO)
+        # LÓGICA DE CAPTURA DO PICO
         if self.is_recording_peak:
             rest_data = self.temp_snapshots.get("rest", {})
-            if not rest_data:
-                return
+            if not rest_data: return
 
-            # Agora verificamos tanto o Gyro da Mestra quanto o da Escrava
             sensor_prefixes = ["gyro_", "slave_"] 
             
             for prefix in sensor_prefixes:
                 try:
-                    # Helper para normalizar os nomes (ax/ay/az para Mestra, gx/gy/gz para Escrava)
                     def get_vector(data, p):
-                        # Mestra usa acelerômetro (ax, ay, az)
                         if data.get(f"{p}ax") is not None:
                             return data.get(f"{p}ax"), data.get(f"{p}ay"), data.get(f"{p}az")
-                        # Escrava usa giroscópio (gx, gy, gz)
                         elif data.get(f"{p}gx") is not None:
                             return data.get(f"{p}gx"), data.get(f"{p}gy"), data.get(f"{p}gz")
                         return None, None, None
@@ -497,10 +544,8 @@ class CalibrationScreen(Screen):
                     curr_x, curr_y, curr_z = get_vector(raw_data, prefix)
                     rest_x, rest_y, rest_z = get_vector(rest_data, prefix)
 
-                    if curr_x is None or rest_x is None: 
-                        continue
+                    if curr_x is None or rest_x is None: continue
 
-                    # Calcula magnitudes
                     current_mag = math.sqrt(curr_x**2 + curr_y**2 + curr_z**2)
                     rest_mag = math.sqrt(rest_x**2 + rest_y**2 + rest_z**2)
                     
@@ -552,19 +597,19 @@ class CalibrationScreen(Screen):
 
         elif "Batida" in action:
             if step == 1:
-                self.wizard_instruction.setText("1/3: Mão em <b>REPOUSO</b> (Parada).\nClique 'Capturar' para definir o zero.")
+                self.wizard_instruction.setText("1/3: Mão em <b>REPOUSO</b>.\nClique 'Capturar' para definir o zero.")
                 self.wizard_capture_btn.setText("Capturar Repouso")
             elif step == 2:
-                self.wizard_instruction.setText("2/3: Preparar <b>BATIDA PARA CIMA</b>.\nClique INICIAR, faça o movimento forte para CIMA, e clique PARAR.")
+                self.wizard_instruction.setText("2/3: Preparar <b>BATIDA PARA CIMA</b>.\nClique INICIAR, faça o movimento, e clique PARAR.")
                 self.wizard_capture_btn.setText("INICIAR GRAVAÇÃO (CIMA)")
             elif step == 3:
-                self.wizard_instruction.setText("<b>GRAVANDO CIMA...</b>\n\nFaça a batida PARA CIMA!\nClique PARAR logo após o movimento.")
+                self.wizard_instruction.setText("<b>GRAVANDO CIMA...</b>\n\nFaça o movimento!\nClique PARAR logo após.")
                 self.wizard_capture_btn.setText("PARAR GRAVAÇÃO")
             elif step == 4:
-                self.wizard_instruction.setText("3/3: Preparar <b>BATIDA PARA BAIXO</b>.\nClique INICIAR, faça o movimento forte para BAIXO, e clique PARAR.")
+                self.wizard_instruction.setText("3/3: Preparar <b>BATIDA PARA BAIXO</b>.\nClique INICIAR, faça o movimento, e clique PARAR.")
                 self.wizard_capture_btn.setText("INICIAR GRAVAÇÃO (BAIXO)")
             elif step == 5:
-                self.wizard_instruction.setText("<b>GRAVANDO BAIXO...</b>\n\nFaça a batida PARA BAIXO!\nClique PARAR logo após o movimento.")
+                self.wizard_instruction.setText("<b>GRAVANDO BAIXO...</b>\n\nFaça o movimento!\nClique PARAR logo após.")
                 self.wizard_capture_btn.setText("PARAR GRAVAÇÃO")
 
     def process_wizard_step(self):
@@ -587,31 +632,27 @@ class CalibrationScreen(Screen):
             self.current_calibration_step += 1
 
         elif "Batida" in action:
-            if step == 1: # Captura Repouso
+            if step == 1:
                 self.temp_snapshots["rest"] = snapshot
                 self.current_calibration_step = 2
-
-            elif step == 2: # Iniciar Rec Cima
+            elif step == 2:
                 self.current_peak_snapshot = self.temp_snapshots["rest"].copy()
                 self.current_peak_magnitude = -1.0
                 self.is_recording_peak = True
                 self.current_calibration_step = 3
                 self.wizard_capture_btn.setText("PARAR Gravação")
-
-            elif step == 3: # Parar Rec Cima
+            elif step == 3:
                 self.is_recording_peak = False
                 self.temp_snapshots["up"] = self.current_peak_snapshot.copy()
                 self.current_calibration_step = 4
                 self.wizard_capture_btn.setText("INICIAR GRAVAÇÃO (BAIXO)")
-
-            elif step == 4: # Iniciar Rec Baixo
+            elif step == 4:
                 self.current_peak_snapshot = self.temp_snapshots["rest"].copy()
                 self.current_peak_magnitude = -1.0
                 self.is_recording_peak = True
                 self.current_calibration_step = 5
                 self.wizard_capture_btn.setText("PARAR Gravação")
-
-            elif step == 5: # Parar Rec Baixo
+            elif step == 5:
                 self.is_recording_peak = False
                 self.temp_snapshots["down"] = self.current_peak_snapshot.copy()
                 self.finish_strum_calibration()
@@ -637,13 +678,11 @@ class CalibrationScreen(Screen):
         return detected_key
 
     def _find_best_sensor_group(self, snap_rest, snap_peak, sensor_prefix_filter):
-        """ Encontra o prefixo (ex: gyro_ ou slave_) que teve maior magnitude de variação """
         max_delta_mag = -1
         detected_prefix = None
         
         for prefix in sensor_prefix_filter:
             try:
-                # Helper para normalizar os nomes (ax/ay/az para Mestra, gx/gy/gz para Escrava)
                 def get_mag(data, p):
                     x = data.get(f"{p}ax") or data.get(f"{p}gx")
                     y = data.get(f"{p}ay") or data.get(f"{p}gy")
@@ -686,15 +725,19 @@ class CalibrationScreen(Screen):
     def finish_strum_calibration(self):
         action = self.current_calibration_action
         
-        # 1. Detectar melhor grupo de sensores (Master ou Slave)
+        # --- ALTERAÇÃO 2: Filtra baseado na ação selecionada ---
+        if "Escrava" in action:
+            prefixes_to_check = ["slave_"]
+        else:
+            prefixes_to_check = ["gyro_", "ax"] # Mestra
+
         detected_prefix = self._find_best_sensor_group(
             self.temp_snapshots["rest"], 
             self.temp_snapshots["up"],
-            sensor_prefix_filter=["gyro_", "slave_"] 
+            sensor_prefix_filter=prefixes_to_check
         )
         
         if detected_prefix:
-            # Helper para extrair vetor normalizado
             def extract_vec(data, p):
                 return {
                     "ax": data.get(f"{p}ax") or data.get(f"{p}gx"),
@@ -702,7 +745,6 @@ class CalibrationScreen(Screen):
                     "az": data.get(f"{p}az") or data.get(f"{p}gz")
                 }
 
-            # 2. Salvar dados vetoriais de Cima e Baixo
             mapping = {
                 "key_prefix": detected_prefix,
                 "rest": extract_vec(self.temp_snapshots["rest"], detected_prefix),
@@ -715,7 +757,7 @@ class CalibrationScreen(Screen):
                 f"Calibração de Batida Salva!\n"
                 f"Sensor detectado: {detected_prefix}")
         else:
-            QMessageBox.warning(self, "Erro", "Movimento insuficiente detectado.")
+            QMessageBox.warning(self, "Erro", "Movimento insuficiente detectado para a luva selecionada.")
         
         self.cancel_wizard()
 
@@ -728,7 +770,6 @@ class CalibrationScreen(Screen):
         self.current_peak_snapshot = {}
         self.current_peak_magnitude = -1.0
         self.update_calibration_status_labels()
-
 
 class MainMenuScreen(Screen):
     """ Tela Principal (Aba 'Controle'). """
