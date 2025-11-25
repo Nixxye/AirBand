@@ -14,22 +14,25 @@
 // --- ESTRUTURA COMBINADA (Master + Slave) ---
 #pragma pack(push, 1)
 struct SensorPacket {
-    // --- Mestra (Mão Esquerda) ---
-    int16_t ax, ay, az;
-    int16_t gx, gy, gz;
-    int32_t mx, my, mz;
-    float heading;
-    float v32, v33, v34, v35;
-    
-    // --- Escrava (Mão Direita - Recebido via ESP-NOW) ---
+    int16_t ax, ay, az;       // Mestra Accel
+    int16_t gx, gy, gz;       // Mestra Gyro
+    int mx, my, mz;           // Mestra Mag
+    float heading;            // Mestra Heading
+    float v32, v33, v34, v35; // Mestra ADC
+    int16_t slave_ax, slave_ay, slave_az;
     int16_t slave_gx, slave_gy, slave_gz; 
-
-    uint32_t timestamp;
-};
+    
+    unsigned long timestamp;
+} __attribute__((packed));
 #pragma pack(pop)
 
 typedef struct slave_msg_t {
-  int16_t gx, gy, gz;
+  int16_t ax;
+  int16_t ay;
+  int16_t az;
+  int16_t gx;
+  int16_t gy;
+  int16_t gz;
 } slave_msg_t;
 
 class WifiServer {
@@ -48,7 +51,12 @@ private:
     unsigned long lastSendTime;
     
     // Dados voláteis da Escrava (atualizados na interrupção)
-    static volatile int16_t rx_gx, rx_gy, rx_gz;
+    static volatile int16_t rx_ax;
+    static volatile int16_t rx_ay;
+    static volatile int16_t rx_az;
+    static volatile int16_t rx_gx;
+    static volatile int16_t rx_gy;
+    static volatile int16_t rx_gz;
 
     WifiServer(const char* ssid, const char* password);
 

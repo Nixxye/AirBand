@@ -3,7 +3,9 @@
 
 WifiServer* WifiServer::instance = nullptr;
 
-// Inicializa variáveis estáticas
+volatile int16_t WifiServer::rx_ax = 0;
+volatile int16_t WifiServer::rx_ay = 0;
+volatile int16_t WifiServer::rx_az = 0;
 volatile int16_t WifiServer::rx_gx = 0;
 volatile int16_t WifiServer::rx_gy = 0;
 volatile int16_t WifiServer::rx_gz = 0;
@@ -11,9 +13,16 @@ volatile int16_t WifiServer::rx_gz = 0;
 // Callback: Roda quando chega dado da Escrava
 void WifiServer::OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     slave_msg_t msg;
+    
     if (len == sizeof(msg)) {
         memcpy(&msg, incomingData, sizeof(msg));
-        // Salva nas variáveis voláteis para o loop principal ler
+        
+        // --- Salva Aceleração nas variáveis voláteis ---
+        rx_ax = msg.ax;
+        rx_ay = msg.ay;
+        rx_az = msg.az;
+        
+        // Salva Giroscópio
         rx_gx = msg.gx;
         rx_gy = msg.gy;
         rx_gz = msg.gz;
@@ -60,7 +69,7 @@ void WifiServer::sendDataToClient() {
         if (WiFi.softAPgetStationNum() > 0) {
             SensorPacket packet;
 
-            // Sensores Locais (Mestra)
+            // --- Sensores Locais (Mestra) ---
             int16_t temp;
             gyro->getData(&packet.ax, &packet.ay, &packet.az, &temp, &packet.gx, &packet.gy, &packet.gz);
             
@@ -68,7 +77,13 @@ void WifiServer::sendDataToClient() {
             mag->getData((int*)&packet.mx, (int*)&packet.my, (int*)&packet.mz, &packet.heading, trash);
             adcReader->getData(&packet.v32, &packet.v33, &packet.v34, &packet.v35);
 
-            // Sensores Remotos (Escrava - recuperados da volatile)
+            // --- Sensores Remotos (Escrava) ---
+            // Preenche Aceleração Escrava no pacote UDP
+            packet.slave_ax = rx_ax;
+            packet.slave_ay = rx_ay;
+            packet.slave_az = rx_az;
+            
+            // Preenche Giroscópio Escrava
             packet.slave_gx = rx_gx;
             packet.slave_gy = rx_gy;
             packet.slave_gz = rx_gz;

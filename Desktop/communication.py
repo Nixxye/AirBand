@@ -6,11 +6,12 @@ class Communication:
     UDP_PORT = 8888
     LISTEN_IP = "0.0.0.0"
     
-    # Struct Atualizada: 
     # Mestra: 6 shorts (acc/gyr) + 3 ints (mag) + 1 float (head) + 4 floats (adc)
-    # Escrava: 3 shorts (slave_gyro)
+    # Escrava: 3 shorts (slave_acc) + 3 shorts (slave_gyro) <--- MUDANÇA AQUI
     # Footer: 1 uint (time)
-    STRUCT_FORMAT = "<hhhhhhiiifffffhhhI" 
+    
+    # Adicionado 'hhh' antes do último 'hhhI'
+    STRUCT_FORMAT = "<hhhhhhiiifffffhhhhhhI" 
     PACKET_SIZE = struct.calcsize(STRUCT_FORMAT)
 
     def __init__(self):
@@ -51,10 +52,10 @@ class Communication:
             while self.connected:
                 try:
                     data, addr = self.sock.recvfrom(1024)
-                    
+
                     if len(data) == self.PACKET_SIZE:
                         values = struct.unpack(self.STRUCT_FORMAT, data)
-                        
+
                         new_data = {
                             # --- MESTRA ---
                             "gyro_ax": values[0], "gyro_ay": values[1], "gyro_az": values[2],
@@ -64,12 +65,15 @@ class Communication:
                             "adc_v32": values[10], "adc_v33": values[11],
                             "adc_v34": values[12], "adc_v35": values[13],
                             
-                            # --- ESCRAVA (Novo) ---
-                            "slave_gx": values[14], 
-                            "slave_gy": values[15], 
-                            "slave_gz": values[16],
+                            "slave_ax": values[14],
+                            "slave_ay": values[15],
+                            "slave_az": values[16],
+
+                            "slave_gx": values[17],
+                            "slave_gy": values[18],
+                            "slave_gz": values[19],
                             
-                            "timestamp": values[17]
+                            "timestamp": values[20]
                         }
                         
                         with self.data_lock:
