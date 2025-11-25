@@ -2,3 +2,4 @@
 mediapipe
 vgamepad
 opencv-python-headless
+pyqtgraph
