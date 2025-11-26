@@ -3,6 +3,7 @@
 
 WifiServer* WifiServer::instance = nullptr;
 
+// Inicializa variáveis estáticas
 volatile int16_t WifiServer::rx_ax = 0;
 volatile int16_t WifiServer::rx_ay = 0;
 volatile int16_t WifiServer::rx_az = 0;
@@ -10,7 +11,7 @@ volatile int16_t WifiServer::rx_gx = 0;
 volatile int16_t WifiServer::rx_gy = 0;
 volatile int16_t WifiServer::rx_gz = 0;
 
-// Callback: Roda quando chega dado da Escrava
+// Callback: Roda quando chega dado da Escrava via ESP-NOW
 void WifiServer::OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     slave_msg_t msg;
     
@@ -32,8 +33,19 @@ void WifiServer::OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, in
 WifiServer::WifiServer(const char* ssid, const char* password) 
     : ap_ssid(ssid), ap_password(password), lastSendTime(0) 
 {
-    pcIP = IPAddress(192, 168, 4, 2);
+    // --- 1. CONFIGURAÇÃO DE IP PERSONALIZADO (Evita conflito com Cabo) ---
+    // Define a rede para 192.168.15.x
+    IPAddress local_IP(192, 168, 15, 1);
+    IPAddress gateway(192, 168, 15, 1);
+    IPAddress subnet(255, 255, 255, 0);
+
+    // Aplica configuração ANTES de iniciar o AP
+    WiFi.softAPConfig(local_IP, gateway, subnet);
+
+    // O PC receberá (via DHCP) ou você define fixo no PC o final .2
+    pcIP = IPAddress(192, 168, 15, 2);
     
+    // Inicializa Sensores
     gyro = Gyroscope::Init_Gyroscope();
     mag = Magnetometer::Init_Magnetometer();
     adcReader = AnalogReader::Init_AnalogReader();
@@ -42,8 +54,11 @@ WifiServer::WifiServer(const char* ssid, const char* password)
     WiFi.mode(WIFI_AP_STA);
     WiFi.setSleep(false);
     
+    // Inicia a rede
     WiFi.softAP(ap_ssid, ap_password, WIFI_CHANNEL); 
 
+    Serial.print("Novo IP da Mestra: ");
+    Serial.println(WiFi.softAPIP()); // Deve imprimir 192.168.15.1
     Serial.print("MAC Address da Mestra: ");
     Serial.println(WiFi.macAddress());
 
@@ -78,18 +93,19 @@ void WifiServer::sendDataToClient() {
             adcReader->getData(&packet.v32, &packet.v33, &packet.v34, &packet.v35);
 
             // --- Sensores Remotos (Escrava) ---
-            // Preenche Aceleração Escrava no pacote UDP
+            // Aceleração
             packet.slave_ax = rx_ax;
             packet.slave_ay = rx_ay;
             packet.slave_az = rx_az;
             
-            // Preenche Giroscópio Escrava
+            // Giroscópio
             packet.slave_gx = rx_gx;
             packet.slave_gy = rx_gy;
             packet.slave_gz = rx_gz;
 
             packet.timestamp = now;
 
+            // Envia para o IP 192.168.15.2
             udp.beginPacket(pcIP, UDP_PORT);
             udp.write((const uint8_t*)&packet, sizeof(SensorPacket));
             udp.endPacket();
