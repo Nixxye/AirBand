@@ -17,95 +17,67 @@ class Drum(Instrument):
 
     def process_data(self, logical_data, camera_data, mappings, emulator):
         """
-        Lógica Híbrida (Sensor Fusion):
-        1. GATILHO: Usa a Aceleração Angular (Giroscópio) para detectar a força da batida.
-        2. DIREÇÃO: Usa a Aceleração Linear (Acelerômetro) vs Gravidade para saber se foi Cima/Baixo.
+        Lógica de Batida baseada puramente em Eixo de Rotação (Giroscópio).
+        Ignora acelerômetro.
         """
-        import math
         import time
-
-        # --- CONSTANTES ---
-        
-        # Limiar do GIROSCÓPIO para detectar que houve uma batida.
-        # Valores raw do MPU6050 vão até 32768. Uma batida rápida é > 5000.
-        GYRO_TRIGGER_THRESHOLD = 8000.0 
-        
-        # Tempo entre batidas
-        STRUM_COOLDOWN = 0.15 
-
         current_time = time.time()
         
+        # Tempo entre batidas
+        STRUM_COOLDOWN = 0.12 
+
         strum_actions = ["Batida (Mestra)", "Batida (Escrava)"]
 
         for action_name in strum_actions:
             if action_name not in mappings: continue
-
+            
             calib = mappings[action_name]
             
-            # --- PASSO 1: DETECTAR O GATILHO (USANDO GIROSCÓPIO) ---
-            gx, gy, gz = 0, 0, 0
+            # Se a calibração não tiver o campo 'axis', é do tipo antigo (ignora ou recalibra)
+            target_axis = calib.get("axis") 
+            if not target_axis: continue
+
+            prefix = calib.get("key_prefix", "gyro_") # gyro_ ou slave_
+            full_key_name = f"{prefix}{target_axis}"  # Ex: "gyro_gz" ou "slave_gx"
             
-            # Extrai dados do Giroscópio
-            if "Mestra" in action_name:
-                if all(k in logical_data for k in ['gyro_gx', 'gyro_gy', 'gyro_gz']):
-                    gx, gy, gz = logical_data['gyro_gx'], logical_data['gyro_gy'], logical_data['gyro_gz']
-                else: continue
-            elif "Escrava" in action_name:
-                if all(k in logical_data for k in ['slave_gx', 'slave_gy', 'slave_gz']):
-                    gx, gy, gz = logical_data['slave_gx'], logical_data['slave_gy'], logical_data['slave_gz']
-                else: continue
-
-            # Calcula Magnitude da Rotação (Velocidade Angular Total)
-            gyro_mag = math.sqrt(gx**2 + gy**2 + gz**2)
-
-            # Se a rotação for fraca, ignora tudo. Não houve batida.
-            if gyro_mag < GYRO_TRIGGER_THRESHOLD:
+            # 1. Pega o valor AO VIVO apenas do eixo dominante
+            # No InstrumentWorker, certifique-se de passar esses dados em logical_data!
+            if full_key_name not in logical_data:
                 continue
-
-            # --- PASSO 2: DETERMINAR A DIREÇÃO (USANDO ACELERÔMETRO) ---
-            # Se chegamos aqui, sabemos que houve uma batida forte. Agora: Cima ou Baixo?
+                
+            current_val = logical_data[full_key_name]
             
-            # Pega vetor de Repouso (Gravidade Calibrada)
-            rest_data = calib.get("rest", {})
-            rx = rest_data.get("ax", rest_data.get("gx", 0))
-            ry = rest_data.get("ay", rest_data.get("gy", 0))
-            rz = rest_data.get("az", rest_data.get("gz", 0))
+            # 2. Verifica Limiar (Threshold)
+            threshold = calib.get("threshold", 4000)
             
-            if rx == 0 and ry == 0 and rz == 0: continue
-
-            # Pega vetor Acelerômetro Atual
-            cx, cy, cz = 0, 0, 0
-            if "Mestra" in action_name:
-                cx, cy, cz = logical_data.get('gyro_ax', 0), logical_data.get('gyro_ay', 0), logical_data.get('gyro_az', 0)
-            elif "Escrava" in action_name:
-                cx, cy, cz = logical_data.get('slave_ax', 0), logical_data.get('slave_ay', 0), logical_data.get('slave_az', 0)
-
-            # Calcula Delta (Movimento real da mão, removendo a gravidade estática)
-            dx = cx - rx
-            dy = cy - ry
-            dz = cz - rz
-
-            # Produto Escalar com a Gravidade (Rest)
-            # Se > 0: Movimento a favor da gravidade (BAIXO)
-            # Se < 0: Movimento contra a gravidade (CIMA)
-            dot_product = (dx * rx) + (dy * ry) + (dz * rz)
-
-            # --- PASSO 3: DISPARO COM DEBOUNCE ---
-            cooldown_key = f"{action_name}_strum"
-            last_time = self.last_strum_time.get(cooldown_key, 0)
-
-            if (current_time - last_time) > STRUM_COOLDOWN:
+            if abs(current_val) > threshold:
                 
-                direction = "DOWN" if dot_product > 0 else "UP"
-                
-                print(f"🎸 {action_name} -> {direction} (Giro: {gyro_mag:.0f})")
+                # 3. Verifica Debounce
+                cooldown_key = f"{action_name}_strum"
+                last_time = self.last_strum_time.get(cooldown_key, 0)
 
-                if direction == "DOWN":
-                    emulator.strum_down()
-                else:
-                    emulator.strum_up()
-                
-                self.last_strum_time[cooldown_key] = current_time
+                if (current_time - last_time) > STRUM_COOLDOWN:
+                    
+                    # 4. Determina Direção pelo Sinal
+                    # Se o sinal atual for igual ao sinal gravado para "Down" -> É Baixo
+                    # Caso contrário -> É Cima
+                    calib_sign = calib.get("down_sign", 1)
+                    
+                    # Lógica de sinal:
+                    # Se (val > 0 e sign > 0) ou (val < 0 e sign < 0) -> Sinais iguais
+                    is_down = (current_val * calib_sign) > 0
+                    
+                    direction = "DOWN" if is_down else "UP"
+                    
+                    print(f"🎸 {action_name} -> {direction} (Eixo: {target_axis}, Val: {current_val})")
+
+                    if direction == "DOWN":
+                        emulator.strum_down()
+                    else:
+                        emulator.strum_up()
+                    
+                    self.last_strum_time[cooldown_key] = current_time
+
 class Guitar(Instrument):
     def __init__(self):
         super().__init__()
