@@ -17,82 +17,99 @@ class Drum(Instrument):
 
     def process_data(self, logical_data, camera_data, mappings, emulator):
         """
-        Processa APENAS batidas para BAIXO (Down strum).
+        Processa batidas (Strum) usando Vetor Diferença e Plano Normal da Gravidade.
+        Não exige calibração de 'Up'/'Down', apenas 'Rest'.
         """
         import math
         import time
 
         # --- CONSTANTES ---
-        ANGLE_THRESHOLD = 30.0      # Ângulo máximo (Cone de detecção)
-        MAGNITUDE_THRESHOLD = 0.8   # 50% da força calibrada mínima
+        # Limiar de variação de aceleração para considerar um movimento.
+        # Ajuste este valor! Se os dados forem raw (0-16000), tente 4000. 
+        # Se forem normalizados (0-1.0), tente 0.3.
+        # Como no código anterior usávamos raw > 100 como filtro de ruído, 
+        # vou assumir um valor conservador aqui.
+        DELTA_THRESHOLD = 3000.0 
+        
+        # Tempo entre batidas (Cooldown)
+        STRUM_COOLDOWN = 0.15 
 
         current_time = time.time()
+        
+        # Ações para verificar
         strum_actions = ["Batida (Mestra)", "Batida (Escrava)"]
-        for action_name in strum_actions:
-            # print(action_name)
-            if action_name not in mappings: 
-                # print(list(mappings.keys()))
-                continue
-            # print("AAA")
-            calib = mappings[action_name]
 
-            # 1. Extrai Vetor Atual
-            curr_vec = None
+        for action_name in strum_actions:
+            if action_name not in mappings: continue
+
+            calib = mappings[action_name]
+            
+            # 1. Obter Vetor de Repouso (Gravidade Calibrada)
+            # Este vetor atua como o vetor Normal do plano que divide Cima/Baixo
+            rest_data = calib.get("rest", {})
+            
+            # Tenta pegar calibração de accel (prioridade) ou gyro
+            rx = rest_data.get("ax", rest_data.get("gx", 0))
+            ry = rest_data.get("ay", rest_data.get("gy", 0))
+            rz = rest_data.get("az", rest_data.get("gz", 0))
+            
+            # Se a calibração for inválida (0,0,0), pula
+            if rx == 0 and ry == 0 and rz == 0: continue
+
+            # 2. Obter Vetor Atual (Live)
+            cx, cy, cz = 0, 0, 0
+            
             if "Mestra" in action_name:
                 if all(k in logical_data for k in ['gyro_ax', 'gyro_ay', 'gyro_az']):
-                    curr_vec = (logical_data['gyro_ax'], logical_data['gyro_ay'], logical_data['gyro_az'])
+                    cx, cy, cz = logical_data['gyro_ax'], logical_data['gyro_ay'], logical_data['gyro_az']
+                else: continue
+            
             elif "Escrava" in action_name:
-                # print("Escrava no action name")
-                # print(logical_data)
+                # Prioriza acelerômetro (ax), fallback para giroscópio (gx) se necessário
                 if all(k in logical_data for k in ['slave_ax', 'slave_ay', 'slave_az']):
-                    curr_vec = (logical_data['slave_ax'], logical_data['slave_ay'], logical_data['slave_az'])
+                    cx, cy, cz = logical_data['slave_ax'], logical_data['slave_ay'], logical_data['slave_az']
+                elif all(k in logical_data for k in ['slave_gx', 'slave_gy', 'slave_gz']):
+                     cx, cy, cz = logical_data['slave_gx'], logical_data['slave_gy'], logical_data['slave_gz']
+                else: continue
 
-            if curr_vec is None: continue
+            # 3. Calcular Vetor Diferença (Delta)
+            # Delta = Atual - Repouso
+            # Isso remove a gravidade estática e deixa apenas a aceleração do movimento da mão
+            dx = cx - rx
+            dy = cy - ry
+            dz = cz - rz
+            
+            # 4. Verificar Magnitude do Delta (Força do movimento)
+            delta_mag = math.sqrt(dx**2 + dy**2 + dz**2)
+            
+            if delta_mag < DELTA_THRESHOLD:
+                continue # Movimento muito fraco, ignora
 
-            # 2. Magnitude Atual
-            curr_mag = math.sqrt(curr_vec[0]**2 + curr_vec[1]**2 + curr_vec[2]**2)
-            # print(f'Magnitude: {curr_mag}')
-            if curr_mag < 100: continue # Ignora ruído
+            # 5. Determinar Direção (Produto Escalar)
+            # Projetamos o Delta no vetor de Repouso (Gravidade)
+            # Dot Product: (Delta . Rest)
+            dot_product = (dx * rx) + (dy * ry) + (dz * rz)
 
-            # 3. Verifica APENAS "down"
-            target_data = calib.get("down", {})
-            
-            cal_vec = (target_data.get("ax", 0), target_data.get("ay", 0), target_data.get("az", 0))
-            cal_mag = math.sqrt(cal_vec[0]**2 + cal_vec[1]**2 + cal_vec[2]**2)
-            
-            if cal_mag == 0: continue
-            # A. Checa Intensidade
-            if curr_mag < (cal_mag * MAGNITUDE_THRESHOLD):
-                continue
+            # Debounce (Cooldown)
+            cooldown_key = f"{action_name}_strum"
+            last_time = self.last_strum_time.get(cooldown_key, 0)
 
-            # B. Checa Ângulo
-            dot_product = (curr_vec[0]*cal_vec[0]) + (curr_vec[1]*cal_vec[1]) + (curr_vec[2]*cal_vec[2])
-            denominator = curr_mag * cal_mag
-            
-            if denominator == 0: continue
-            
-            cos_theta = max(-1.0, min(1.0, dot_product / denominator))
-            angle = math.degrees(math.acos(cos_theta))
+            if (current_time - last_time) > STRUM_COOLDOWN:
+                # Se o produto escalar for positivo: O movimento tem componente na direção da gravidade (BAIXO) 
 
-            # C. Dispara se estiver dentro do ângulo
-            # print(f'Ângulo: {angle}')
-            
-            if angle <= ANGLE_THRESHOLD:
+
+                # Se negativo: O movimento é contra a gravidade (CIMA)
                 
-                # Debounce (Cooldown)
-                cooldown_key = f"{action_name}_strum"
-                last_time = self.last_strum_time.get(cooldown_key, 0)
+                direction = "DOWN" if dot_product > 0 else "UP"
+                
+                print(f"🎸 {action_name} -> {direction} (Força: {delta_mag:.0f})")
 
-                if (current_time - last_time) > self.STRUM_COOLDOWN:
-                    print(f"🎸 {action_name} -> DOWN (Ângulo: {angle:.1f}°)")
-                    
-                    emulator.atualizar_estado([1,1,1,1])
-                    print(f'Ângulo: {angle}')
-                    print(f'Magnitude: {curr_mag}')
-                    print(curr_vec)
-                    
-                    self.last_strum_time[cooldown_key] = current_time
-
+                if direction == "DOWN":
+                    emulator.strum_down()
+                else:
+                    emulator.strum_up()
+                
+                self.last_strum_time[cooldown_key] = current_time
 
 class Guitar(Instrument):
     def __init__(self):
