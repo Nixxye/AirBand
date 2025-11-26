@@ -667,58 +667,43 @@ class CalibrationScreen(QWidget):
 
     def finish_strum_calibration(self):
         """ 
-        Identifica o eixo do giroscópio dominante e o sentido da batida para baixo. 
+        Salva o VETOR COMPLETO (3 eixos) do giroscópio no pico do movimento.
         """
         action = self.current_calibration_action
         prefix = "slave_" if "Escrava" in action else "gyro_"
         
-        # Dados do pico capturado
-        peak_data = self.current_peak_axis_data
+        # Dados do pico capturado (dicionário com gx, gy, gz)
+        peak_vector = self.current_peak_axis_data
         
-        if not peak_data:
+        if not peak_vector:
              QMessageBox.warning(self, "Erro", "Nenhum movimento forte detectado.")
              self.cancel_wizard()
              return
 
-        # 1. Identificar Eixo Dominante (Qual girou mais?)
-        ax_val = abs(peak_data.get("gx", 0))
-        ay_val = abs(peak_data.get("gy", 0))
-        az_val = abs(peak_data.get("gz", 0))
+        # 1. Calcula a Magnitude total desse vetor de pico
+        gx = peak_vector.get("gx", 0)
+        gy = peak_vector.get("gy", 0)
+        gz = peak_vector.get("gz", 0)
+        peak_magnitude = math.sqrt(gx**2 + gy**2 + gz**2)
         
-        dominant_axis = ""
-        dominant_val_signed = 0
-        
-        if ax_val > ay_val and ax_val > az_val:
-            dominant_axis = "gx"
-            dominant_val_signed = peak_data["gx"]
-        elif ay_val > ax_val and ay_val > az_val:
-            dominant_axis = "gy"
-            dominant_val_signed = peak_data["gy"]
-        else:
-            dominant_axis = "gz"
-            dominant_val_signed = peak_data["gz"]
-            
-        # 2. Definir Sinal de "Down" e Limiar
-        # Se na batida pra baixo o eixo foi negativo, guardamos -1.
-        down_sign = 1 if dominant_val_signed > 0 else -1
-        
-        # Limiar é 40% da força máxima que o usuário fez na calibração
-        threshold = abs(dominant_val_signed) * 0.4 
+        # 2. Define o Limiar (Threshold)
+        # O gatilho será acionado se a projeção do movimento atual nesse vetor
+        # for maior que X% da força original.
+        threshold = peak_magnitude * 0.4 # 40% de sensibilidade
 
         mapping = {
             "key_prefix": prefix,
-            "axis": dominant_axis,  # Ex: "gz"
-            "down_sign": down_sign, # Ex: -1
-            "threshold": threshold  # Ex: 5000
+            "vector": peak_vector, # Salva {gx:..., gy:..., gz:...}
+            "threshold": threshold 
         }
         
         self.main_app.sensor_mappings[action] = mapping
         self.main_app.save_mappings_to_file()
         
         QMessageBox.information(self, "Sucesso", 
-            f"Batida Calibrada (Giroscópio)!\n\n"
-            f"Eixo: {dominant_axis.upper()}\n"
-            f"Sentido Down: {down_sign}\n"
+            f"Batida Vetorial Calibrada!\n\n"
+            f"Vetor: [{gx}, {gy}, {gz}]\n"
+            f"Força Ref: {peak_magnitude:.0f}\n"
             f"Limiar: {threshold:.0f}")
         
         self.cancel_wizard()

@@ -36,13 +36,16 @@ class InstrumentWorker(QThread):
             logical_data = {}
             
             # --- 1. PASSO CRÍTICO: Copiar Vetores Brutos ---
-            # A lógica vetorial (process_data na classe Guitar) precisa acessar 
-            # 'gyro_ax', 'slave_ax', etc. diretamente.
+            # A lógica vetorial precisa acessar tanto Accel (Direção) quanto Gyro (Gatilho)
             
-            # Chaves essenciais para a matemática vetorial:
             essential_keys = [
-                'gyro_ax', 'gyro_ay', 'gyro_az',  # Mestra
-                'slave_ax', 'slave_ay', 'slave_az' # Escrava
+                # --- Mestra ---
+                'gyro_ax', 'gyro_ay', 'gyro_az',  # Acelerômetro
+                'gyro_gx', 'gyro_gy', 'gyro_gz',  # Giroscópio <--- ADICIONADO
+                
+                # --- Escrava ---
+                'slave_ax', 'slave_ay', 'slave_az', # Acelerômetro
+                'slave_gx', 'slave_gy', 'slave_gz'  # Giroscópio <--- ADICIONADO
             ]
             
             for k in essential_keys:
@@ -50,7 +53,6 @@ class InstrumentWorker(QThread):
                     logical_data[k] = raw_data[k]
 
             # --- 2. Copiar Mapeamentos Lógicos (ADC / Dedos) ---
-            # Isso garante que 'Dedo 1 (Indicador)' tenha o valor do 'adc_v32'
             for action, mapping in self.sensor_mappings.items():
                 raw_key = mapping.get("key")       # Ex: "adc_v32"
 
@@ -59,15 +61,16 @@ class InstrumentWorker(QThread):
 
             # --- 3. Processamento ---
             if logical_data:
-                # Chama a lógica matemática (que agora encontrará as chaves 'gyro_ax', etc.)
-                # self.guitar.process_data(
-                #     logical_data, 
-                #     self.sensor_mappings, 
-                #     self.emulator
-                # )
+                # Aqui você escolhe qual lógica rodar (Guitarra ou Bateria)
+                # Como estamos focando na batida (strum), usaremos a Drum.process_data
+                # que contém a lógica nova de Giroscópio + Acelerômetro
+                
                 self.drum.process_data(
                     logical_data, 
                     None,
                     self.sensor_mappings, 
                     self.emulator
                 )
+                
+                # Se precisar processar os dedos da guitarra também:
+                # self.guitar.process_data(...)

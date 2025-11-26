@@ -17,13 +17,13 @@ class Drum(Instrument):
 
     def process_data(self, logical_data, camera_data, mappings, emulator):
         """
-        Lógica de Batida baseada puramente em Eixo de Rotação (Giroscópio).
-        Ignora acelerômetro.
+        Processamento Vetorial de Giroscópio (3 Eixos).
+        Usa Projeção Escalar para detectar similaridade de direção e intensidade.
         """
+        import math
         import time
         current_time = time.time()
-        
-        # Tempo entre batidas
+
         STRUM_COOLDOWN = 0.12 
 
         strum_actions = ["Batida (Mestra)", "Batida (Escrava)"]
@@ -33,51 +33,63 @@ class Drum(Instrument):
             
             calib = mappings[action_name]
             
-            # Se a calibração não tiver o campo 'axis', é do tipo antigo (ignora ou recalibra)
-            target_axis = calib.get("axis") 
-            if not target_axis: continue
+            # Recupera o vetor calibrado (Down)
+            cal_vec = calib.get("vector") # {gx, gy, gz}
+            if not cal_vec: continue
 
-            prefix = calib.get("key_prefix", "gyro_") # gyro_ ou slave_
-            full_key_name = f"{prefix}{target_axis}"  # Ex: "gyro_gz" ou "slave_gx"
+            prefix = calib.get("key_prefix", "gyro_")
             
-            # 1. Pega o valor AO VIVO apenas do eixo dominante
-            # No InstrumentWorker, certifique-se de passar esses dados em logical_data!
-            if full_key_name not in logical_data:
-                continue
+            # 1. Monta o Vetor Calibrado (Referência)
+            rx = cal_vec.get("gx", 0)
+            ry = cal_vec.get("gy", 0)
+            rz = cal_vec.get("gz", 0)
+            
+            # Magnitude do vetor de referência
+            ref_mag = math.sqrt(rx**2 + ry**2 + rz**2)
+            if ref_mag == 0: continue
+
+            # 2. Monta o Vetor Atual (Live)
+            # Verifica se os dados existem no pacote
+            if f"{prefix}gx" not in logical_data: continue
+            
+            cx = logical_data[f"{prefix}gx"]
+            cy = logical_data[f"{prefix}gy"]
+            cz = logical_data[f"{prefix}gz"]
+
+            # 3. CÁLCULO DA PROJEÇÃO (Dot Product)
+            # Projetamos o vetor Atual sobre o vetor de Referência Normalizado.
+            # Isso nos diz "Quanto de força existe na direção da batida calibrada?"
+            
+            # Dot Product (A . B)
+            dot_product = (cx * rx) + (cy * ry) + (cz * rz)
+            
+            # Projeção Escalar = (A . B) / |B|
+            # Isso retorna um valor na mesma escala dos dados brutos (ex: 5000, 10000)
+            projection_value = dot_product / ref_mag
+            
+            # 4. Verifica Limiar
+            threshold = 26000
+            
+            # Se projeção for muito positiva -> Movimento igual ao calibrado (DOWN)
+            # Se projeção for muito negativa -> Movimento oposto ao calibrado (UP)
+            
+            if abs(projection_value) > threshold:
                 
-            current_val = logical_data[full_key_name]
-            
-            # 2. Verifica Limiar (Threshold)
-            threshold = calib.get("threshold", 4000)
-            
-            if abs(current_val) > threshold:
-                
-                # 3. Verifica Debounce
                 cooldown_key = f"{action_name}_strum"
                 last_time = self.last_strum_time.get(cooldown_key, 0)
 
                 if (current_time - last_time) > STRUM_COOLDOWN:
                     
-                    # 4. Determina Direção pelo Sinal
-                    # Se o sinal atual for igual ao sinal gravado para "Down" -> É Baixo
-                    # Caso contrário -> É Cima
-                    calib_sign = calib.get("down_sign", 1)
+                    direction = "DOWN" if projection_value > 0 else "UP"
                     
-                    # Lógica de sinal:
-                    # Se (val > 0 e sign > 0) ou (val < 0 e sign < 0) -> Sinais iguais
-                    is_down = (current_val * calib_sign) > 0
-                    
-                    direction = "DOWN" if is_down else "UP"
-                    
-                    print(f"🎸 {action_name} -> {direction} (Eixo: {target_axis}, Val: {current_val})")
+                    print(f"🎸 {action_name} -> {direction} (Força Projetada: {abs(projection_value):.0f})")
 
-                    if direction == "DOWN":
-                        emulator.strum_down()
-                    else:
-                        emulator.strum_up()
+                    # if direction == "DOWN":
+                    #     emulator.strum_down()
+                    # else:
+                    #     emulator.strum_up()
                     
                     self.last_strum_time[cooldown_key] = current_time
-
 class Guitar(Instrument):
     def __init__(self):
         super().__init__()

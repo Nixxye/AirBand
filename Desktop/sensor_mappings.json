@@ -51,21 +51,12 @@
     },
     "Batida (Escrava)": {
         "key_prefix": "slave_",
-        "rest": {
-            "ax": 103,
-            "ay": 20,
-            "az": -14
+        "vector": {
+            "gx": -25013,
+            "gy": 1367,
+            "gz": -25013
         },
-        "up": {
-            "ax": 199,
-            "ay": 187,
-            "az": -200
-        },
-        "down": {
-            "ax": 199,
-            "ay": 130,
-            "az": -104
-        }
+        "threshold": 14160.050999908159
     },
     "Dedo 2 (M\u00e9dio)": {
         "key": "adc_v34",
@@ -84,5 +75,11 @@
         "rest": 0,
         "half": 0.5181685090065002,
         "full": 0.2
+    },
+    "Batida (Mestra)": {
+        "key_prefix": "gyro_",
+        "axis": "gz",
+        "down_sign": -1,
+        "threshold": 10005.2
     }
 }
