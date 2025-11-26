@@ -23,16 +23,17 @@ class Drum(Instrument):
         import time
 
         # --- CONSTANTES ---
-        ANGLE_THRESHOLD = 45.0      # Ângulo máximo (Cone de detecção)
-        MAGNITUDE_THRESHOLD = 0.5   # 50% da força calibrada mínima
+        ANGLE_THRESHOLD = 30.0      # Ângulo máximo (Cone de detecção)
+        MAGNITUDE_THRESHOLD = 0.8   # 50% da força calibrada mínima
 
         current_time = time.time()
-        
         strum_actions = ["Batida (Mestra)", "Batida (Escrava)"]
-
         for action_name in strum_actions:
-            if action_name not in mappings: continue
-
+            # print(action_name)
+            if action_name not in mappings: 
+                # print(list(mappings.keys()))
+                continue
+            # print("AAA")
             calib = mappings[action_name]
 
             # 1. Extrai Vetor Atual
@@ -41,6 +42,8 @@ class Drum(Instrument):
                 if all(k in logical_data for k in ['gyro_ax', 'gyro_ay', 'gyro_az']):
                     curr_vec = (logical_data['gyro_ax'], logical_data['gyro_ay'], logical_data['gyro_az'])
             elif "Escrava" in action_name:
+                # print("Escrava no action name")
+                # print(logical_data)
                 if all(k in logical_data for k in ['slave_ax', 'slave_ay', 'slave_az']):
                     curr_vec = (logical_data['slave_ax'], logical_data['slave_ay'], logical_data['slave_az'])
 
@@ -48,6 +51,7 @@ class Drum(Instrument):
 
             # 2. Magnitude Atual
             curr_mag = math.sqrt(curr_vec[0]**2 + curr_vec[1]**2 + curr_vec[2]**2)
+            # print(f'Magnitude: {curr_mag}')
             if curr_mag < 100: continue # Ignora ruído
 
             # 3. Verifica APENAS "down"
@@ -57,7 +61,6 @@ class Drum(Instrument):
             cal_mag = math.sqrt(cal_vec[0]**2 + cal_vec[1]**2 + cal_vec[2]**2)
             
             if cal_mag == 0: continue
-
             # A. Checa Intensidade
             if curr_mag < (cal_mag * MAGNITUDE_THRESHOLD):
                 continue
@@ -72,6 +75,8 @@ class Drum(Instrument):
             angle = math.degrees(math.acos(cos_theta))
 
             # C. Dispara se estiver dentro do ângulo
+            # print(f'Ângulo: {angle}')
+            
             if angle <= ANGLE_THRESHOLD:
                 
                 # Debounce (Cooldown)
@@ -81,7 +86,10 @@ class Drum(Instrument):
                 if (current_time - last_time) > self.STRUM_COOLDOWN:
                     print(f"🎸 {action_name} -> DOWN (Ângulo: {angle:.1f}°)")
                     
-                    emulator.strum_down() # Sempre aciona para baixo
+                    emulator.atualizar_estado([1,1,1,1])
+                    print(f'Ângulo: {angle}')
+                    print(f'Magnitude: {curr_mag}')
+                    print(curr_vec)
                     
                     self.last_strum_time[cooldown_key] = current_time
 
@@ -137,7 +145,7 @@ class Guitar(Instrument):
 
                     # --- Calcula % de flexão (Normalização) ---
                     progress = (val - rest) / total_range
-
+                    
                     # --- Máquina de Estados (Histerese) ---
                     is_active = (self.lanes_vector[i] == 1)
 

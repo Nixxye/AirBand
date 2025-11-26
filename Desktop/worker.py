@@ -60,9 +60,14 @@ class InstrumentWorker(QThread):
             # --- 3. Processamento ---
             if logical_data:
                 # Chama a lógica matemática (que agora encontrará as chaves 'gyro_ax', etc.)
+                # self.guitar.process_data(
+                #     logical_data, 
+                #     self.sensor_mappings, 
+                #     self.emulator
+                # )
                 self.drum.process_data(
                     logical_data, 
-                    None, # Camera Data (passado separadamente se necessário)
+                    None,
                     self.sensor_mappings, 
                     self.emulator
                 )
