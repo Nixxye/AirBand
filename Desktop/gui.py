@@ -708,6 +708,9 @@ class MainMenuScreen(Screen):
         """ Recebe os dados da câmera e os exibe no terminal de debug. """
 
         self._process_camera_hits(data)
+        
+        # OBTÉM O VETOR DE STATUS AGORA (CHAMADA À FUNÇÃO MODIFICADA)
+        drum_vector = self.get_active_drum_keys() # Ex: [1, 0, 0, 0]
 
         # Só atualiza se o terminal de debug estiver checado
         if not self.debug_group.isChecked():
@@ -721,16 +724,38 @@ class MainMenuScreen(Screen):
         texto += f"<span style='color:#00FF00;'>Cotov. Esq:</span> {data['Angulo_Esq_Cotovelo']:.1f}°\n"
         texto += f"<span style='color:#00FF00;'>Cotov. Dir:</span> {data['Angulo_Dir_Cotovelo']:.1f}°\n"
         
-        # Formata os hits
+        # Formata o vetor de status
+        vetor_str = str(drum_vector).replace('[', '<b>[').replace(']', ']</b>')
+        texto += f"<span style='color:#7FFF00; font-weight:bold;'>VETOR DRUM:</span> {vetor_str}\n"
+
+        # Mantém a linha de hits original (opcional, mas útil para debug)
         hit_color = "#FF4444" if data['Baterias_Ativadas'] != "Nenhuma" else "#AAAAAA"
-        texto += f"<span style='color:{hit_color}; font-weight:bold;'>HITS:</span> {data['Baterias_Ativadas']}\n"
+        texto += f"<span style='color:{hit_color}; font-weight:bold;'>HITS (string):</span> {data['Baterias_Ativadas']}\n"
+        # --------------------
         
         # Atualiza o terminal
         self.sensor_output.setHtml(texto)
-    
+
     def get_active_drum_keys(self):
-        """ Retorna a lista atual de tambores ativos. """
-        return self.active_drums_list
+        """ 
+        Retorna o status atual dos tambores em um vetor de 4 posições.
+        [Drum 1, Drum 2, Drum 3, Drum 4]
+        """
+        # Inicializa o vetor de status com 0s
+        drum_status_vector = [0, 0, 0, 0]
+        
+        # Percorre a lista de hits ativos (ex: ['Drum 1', 'Drum 3'])
+        for drum_key in self.active_drums_list:
+            try:
+                drum_number = int(drum_key.split(' ')[-1])
+                
+                if 1 <= drum_number <= 4:
+                    index = drum_number - 1
+                    drum_status_vector[index] = 1 
+            except (ValueError, IndexError):
+                continue
+                
+        return drum_status_vector
     
     def get_selected_instrument(self):
         """ Retorna o texto do item selecionado no ComboBox de Instrumento. """
