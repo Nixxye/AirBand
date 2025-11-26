@@ -115,26 +115,31 @@ class MainApplication(QMainWindow):
         # Passa dados para o terminal na aba "Controle"
         self.main_menu_tab.update_sensor_data(raw_data)
 
-        logical_data = {}
-        if self.communication.connected:
-            for action, mapping in self.sensor_mappings.items():
-                raw_key = mapping.get("key")
-                key_prefix = mapping.get("key_prefix")
+        # 1. Se o instrumento selecionado é Guitarra (Luva)
+        if self.main_menu_tab.get_selected_instrument() == "Guitarra (Luva)":
+            # ... (código existente para processar dados da luva) ...
 
-                if raw_key in raw_data:
-                    logical_data[action] = raw_data[raw_key]
-                elif key_prefix and raw_data.get(f"{key_prefix}ax") is not None:
-                    logical_data[action] = {
-                        "ax": raw_data.get(f"{key_prefix}ax", 0),
-                        "ay": raw_data.get(f"{key_prefix}ay", 0),
-                        "az": raw_data.get(f"{key_prefix}az", 0)
-                    }
+            logical_data = {}
+            if self.communication.connected:
+                # ... (lógica de mapeamento da luva) ...
+                
+                # Processamento da Guitarra
+                if logical_data:
+                    self.guitar.process_data(
+                        logical_data, 
+                        self.sensor_mappings, 
+                        self.emulator
+                    )
 
-        if logical_data:
-            # Passa dados para processamento da Guitarra
-            self.guitar.process_data(
-                logical_data, 
-                self.sensor_mappings, 
+        # 2. Se o instrumento selecionado é Bateria (Camera)
+        elif self.main_menu_tab.get_selected_instrument() == "Bateria (Camera)":
+            
+            # Pega a lista de hits ativos da MainMenuScreen
+            active_drums = self.main_menu_tab.get_active_drum_keys()
+            
+            # Processa os hits na classe Drum
+            self.drum.process_camera_data(
+                active_drums, 
                 self.emulator
             )
 
@@ -546,6 +551,7 @@ class MainMenuScreen(Screen):
     """ Tela Principal (Aba 'Controle'). """
     def __init__(self, parent):
         super().__init__(parent)
+        self.active_drums_list = []
 
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
@@ -631,6 +637,8 @@ class MainMenuScreen(Screen):
         self.camera_widget = CameraWidget(self) 
         self.camera_widget.camera_data_signal.connect(self.update_camera_data)
 
+        self.camera_widget.start_camera()
+
         camera_frame = QGroupBox("Retorno da Câmera 🥁")
         camera_layout = QVBoxLayout(camera_frame)
         camera_layout.addWidget(self.camera_widget)
@@ -643,6 +651,7 @@ class MainMenuScreen(Screen):
         main_layout.addLayout(right_column, 1) 
 
         self.setLayout(main_layout)
+    
 
     def update_sensor_data(self, raw_data):
         if not self.debug_group.isChecked():
@@ -669,25 +678,37 @@ class MainMenuScreen(Screen):
                 )
     
     def toggle_camera_feedback(self):
-        # Verifica se a câmera está atualmente aberta (cap é o objeto cv2.VideoCapture)
-        is_camera_on = self.camera_widget.cap is not None and self.camera_widget.cap.isOpened()
+        """ 
+        Apenas alterna o estado de exibição do feed da câmera,
+        mantendo a captura e o processamento sempre ativos.
+        """
+        # Inverte o estado atual de exibição
+        is_camera_on = self.camera_widget.show_video_feed 
         
         if is_camera_on:
-            # Se a câmera está LIGADA, vamos DESLIGAR
-            self.camera_widget.stop_camera()
+            # Se estava LIGADA, DESLIGA a visualização
+            self.camera_widget.set_feedback_visible(False)
             self.camera_feedback_btn.setText("Ver Retorno da Câmera (Bateria)")
-            # Opcional: Desliga a luz de fundo do QLabel
-            self.camera_widget.video_label.setStyleSheet("") 
-            
         else:
-            # Se a câmera está DESLIGADA, vamos LIGAR
-            self.camera_widget.start_camera()
+            # Se estava DESLIGADA, LIGA a visualização
+            self.camera_widget.set_feedback_visible(True)
             self.camera_feedback_btn.setText("Parar Retorno da Câmera (Bateria)")
-            # Opcional: Adiciona um fundo escuro/preto para dar a impressão de que está ativo/pronto
-            self.camera_widget.video_label.setStyleSheet("background-color: black;")
+
+    def _process_camera_hits(self, data):
+        """ Processa a string de hits da câmera para uma lista. """
+        active_drums_str = data.get('Baterias_Ativadas', "Nenhuma")
+        
+        if active_drums_str == "Nenhuma":
+            self.active_drums_list = []
+        else:
+            # Transforma a string "Drum 1, Drum 3" em ['Drum 1', 'Drum 3']
+            self.active_drums_list = [drum.strip() for drum in active_drums_str.split(',')]
 
     def update_camera_data(self, data):
         """ Recebe os dados da câmera e os exibe no terminal de debug. """
+
+        self._process_camera_hits(data)
+
         # Só atualiza se o terminal de debug estiver checado
         if not self.debug_group.isChecked():
             return
@@ -706,7 +727,16 @@ class MainMenuScreen(Screen):
         
         # Atualiza o terminal
         self.sensor_output.setHtml(texto)
-
+    
+    def get_active_drum_keys(self):
+        """ Retorna a lista atual de tambores ativos. """
+        return self.active_drums_list
+    
+    def get_selected_instrument(self):
+        """ Retorna o texto do item selecionado no ComboBox de Instrumento. """
+        return self.instrument_combo.currentText()
+    
+    
 # =======================================================================
 # --- NOVO BLOCO: LÓGICA DA CÂMERA INTEGRADA (PyQt + OpenCV + MediaPipe) ---
 # =======================================================================
@@ -752,6 +782,8 @@ class CameraWidget(QWidget):
         self.video_label.setFixedSize(self.w, self.h)
         layout.addWidget(self.video_label)
         self.setLayout(layout)
+
+        self.show_video_feed = False
         
         # --- Configuração da Câmera e MediaPipe ---
         self.cap = None
@@ -780,23 +812,46 @@ class CameraWidget(QWidget):
     def start_camera(self):
         """ Inicializa a captura da câmera e o timer. """
         if self.cap is None or not self.cap.isOpened():
-            # Tenta abrir o dispositivo 0
             self.cap = cv2.VideoCapture(0)
             if not self.cap.isOpened():
-                self.video_label.setText("Erro ao abrir a câmera (cv2.VideoCapture(0))")
+                # Altera o texto de acordo com o estado de exibição
+                text = "Erro ao abrir a câmera (cv2.VideoCapture(0))"
+                if self.show_video_feed:
+                    self.video_label.setText(text)
+                else:
+                    print(f"ATENÇÃO: {text}") # Apenas imprime se não for visível
                 return
             
-        self.timer.start(30) # Aprox. 33ms para 30 FPS
+        # O timer sempre roda (para processar os hits em background)
+        if not self.timer.isActive():
+            self.timer.start(30) # Aprox. 33ms para 30 FPS
 
     def stop_camera(self):
-        """ Para o timer e libera o objeto de captura. """
+        """ Para o timer E libera o objeto de captura. """
+        # Opcional: Se você quiser que a câmera rode em background para sempre, 
+        # remova esta função e a chamada dela no closeEvent, mas manteremos
+        # o padrão de desligar para liberar recursos.
         self.timer.stop()
         if self.cap:
             self.cap.release()
             self.cap = None
-            self.video_label.setText("Câmera Desligada")
+            if self.show_video_feed:
+                self.video_label.setText("Câmera Desligada")
+            else:
+                self.video_label.setText("Aguardando Câmera...")
 
-    # Dentro da classe CameraWidget...
+    def set_feedback_visible(self, visible):
+        """ Define se o feed de vídeo deve ser exibido. """
+        self.show_video_feed = visible
+        if not visible:
+            # Limpa o label se for desligar a visualização
+            self.video_label.setText("Câmera processando em background...")
+            self.video_label.setStyleSheet("") # Remove o estilo de fundo
+        else:
+            # Garante que a câmera esteja ligada ao pedir a visualização
+            self.start_camera() 
+            # Define o estilo de fundo (se o feed for ligado)
+            self.video_label.setStyleSheet("background-color: black;")
     
     def to_pixel(self, landmark, w, h):
         """ Converte coordenadas normalizadas do MediaPipe para pixels. """
@@ -940,17 +995,24 @@ class CameraWidget(QWidget):
         }
         self.camera_data_signal.emit(camera_data)
             
-        # 4. Exibir no Qt (agora convertendo o frame BGR para RGB novamente)
-        rgb_display = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        bytes_per_line = 3 * w
-        qt_image = QImage(rgb_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        
-        # Redimensiona o pixmap para o tamanho do label
-        scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
-            self.video_label.size(), 
-            Qt.KeepAspectRatio
-        )
-        self.video_label.setPixmap(scaled_pixmap)
+        # 4. Exibir no Qt (SOMENTE se a flag self.show_video_feed estiver True)
+        if self.show_video_feed:
+            # ... (código de conversão e exibição: cv2.cvtColor(image, cv2.COLOR_BGR2RGB) até self.video_label.setPixmap(scaled_pixmap))
+            rgb_display = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            bytes_per_line = 3 * w
+            qt_image = QImage(rgb_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            
+            scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+                self.video_label.size(), 
+                Qt.KeepAspectRatio
+            )
+            self.video_label.setPixmap(scaled_pixmap)
+
+        else:
+            # Se a visualização estiver desligada, apenas garante que o label
+            # mostre o status correto se a câmera estiver ativada, mas não mostrando.
+            # (O label já foi limpo em set_feedback_visible(False))
+            pass
 
     def closeEvent(self, event):
         """ Garante que a câmera seja liberada ao fechar o widget. """
