@@ -24,7 +24,8 @@ class Drum(Instrument):
         import time
         current_time = time.time()
 
-        STRUM_COOLDOWN = 0.12 
+        STRUM_COOLDOWN = 0.12
+        print("🥁 Processando dados da bateria...")
 
         strum_actions = ["Batida (Mestra)", "Batida (Escrava)"]
 
@@ -117,7 +118,7 @@ class Guitar(Instrument):
         Processa lógica de Dedos com Histerese e Filtro Anti-Ruído.
         """
         new_lanes = self.lanes_vector[:] # Copia o estado atual
-
+        print("🎸 Processando dados da guitarra...")
         for i, action in enumerate(self.finger_actions):
             if action in mappings and action in logical_data:
                 raw_val = float(logical_data[action])
