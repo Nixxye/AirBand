@@ -1217,11 +1217,11 @@ class CameraWidget(QWidget):
         )
         self.video_label.setPixmap(scaled_pixmap)
 
-        else:
-            # Se a visualização estiver desligada, apenas garante que o label
-            # mostre o status correto se a câmera estiver ativada, mas não mostrando.
-            # (O label já foi limpo em set_feedback_visible(False))
-            pass
+        # else:
+        #     # Se a visualização estiver desligada, apenas garante que o label
+        #     # mostre o status correto se a câmera estiver ativada, mas não mostrando.
+        #     # (O label já foi limpo em set_feedback_visible(False))
+        #     pass
 
     def closeEvent(self, event):
         """ Garante que a câmera seja liberada ao fechar o widget. """
