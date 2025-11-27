@@ -330,9 +330,34 @@ class MainApplication(QMainWindow):
 
         # Passa dados para o terminal na aba "Controle"
         self.main_menu_tab.update_sensor_data(raw_data)
-        
-        # A lógica da guitarra (self.guitar.process_data) foi removida daqui 
-        # pois agora roda no worker.py
+
+        # 1. Se o instrumento selecionado é Guitarra (Luva)
+        if self.main_menu_tab.get_selected_instrument() == "Guitarra (Luva)":
+            # ... (código existente para processar dados da luva) ...
+
+            logical_data = {}
+            if self.communication.connected:
+                # ... (lógica de mapeamento da luva) ...
+                
+                # Processamento da Guitarra
+                if logical_data:
+                    self.guitar.process_data(
+                        logical_data, 
+                        self.sensor_mappings, 
+                        self.emulator
+                    )
+
+        # 2. Se o instrumento selecionado é Bateria (Camera)
+        elif self.main_menu_tab.get_selected_instrument() == "Bateria (Camera)":
+            
+            # Pega a lista de hits ativos da MainMenuScreen
+            active_drums = self.main_menu_tab.get_active_drum_keys()
+            
+            # Processa os hits na classe Drum
+            self.drum.process_camera_data(
+                active_drums, 
+                self.emulator
+            )
 
     def closeEvent(self, event):
         """ Garante encerramento limpo de todas as threads. """
@@ -719,6 +744,7 @@ class MainMenuScreen(Screen):
     """ Tela Principal (Aba 'Controle'). """
     def __init__(self, parent):
         super().__init__(parent)
+        self.active_drums_list = []
 
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
@@ -805,6 +831,8 @@ class MainMenuScreen(Screen):
         self.camera_widget = CameraWidget(self) 
         self.camera_widget.camera_data_signal.connect(self.update_camera_data)
 
+        self.camera_widget.start_camera()
+
         camera_frame = QGroupBox("Retorno da Câmera 🥁")
         camera_layout = QVBoxLayout(camera_frame)
         camera_layout.addWidget(self.camera_widget)
@@ -817,6 +845,13 @@ class MainMenuScreen(Screen):
         main_layout.addLayout(right_column, 1)
 
         self.setLayout(main_layout)
+    
+
+    def change_emulator_type(self, text):
+        if text == "Joystick":
+            self.main_app.emulator.set_tipo_emulacao(Emulator.TIPO_CONTROLE)
+        else:
+            self.main_app.emulator.set_tipo_emulacao(Emulator.TIPO_TECLADO)
 
     def change_emulator_type(self, text):
         if text == "Joystick":
@@ -853,21 +888,35 @@ class MainMenuScreen(Screen):
         is_camera_on = self.camera_widget.cap is not None and self.camera_widget.cap.isOpened()
 
         if is_camera_on:
-            # Se a câmera está LIGADA, vamos DESLIGAR
-            self.camera_widget.stop_camera()
+            # Se estava LIGADA, DESLIGA a visualização
+            self.camera_widget.set_feedback_visible(False)
             self.camera_feedback_btn.setText("Ver Retorno da Câmera (Bateria)")
             # Opcional: Desliga a luz de fundo do QLabel
             self.camera_widget.video_label.setStyleSheet("") 
 
         else:
-            # Se a câmera está DESLIGADA, vamos LIGAR
-            self.camera_widget.start_camera()
+            # Se estava DESLIGADA, LIGA a visualização
+            self.camera_widget.set_feedback_visible(True)
             self.camera_feedback_btn.setText("Parar Retorno da Câmera (Bateria)")
-            # Opcional: Adiciona um fundo escuro/preto para dar a impressão de que está ativo/pronto
-            self.camera_widget.video_label.setStyleSheet("background-color: black;")
+
+    def _process_camera_hits(self, data):
+        """ Processa a string de hits da câmera para uma lista. """
+        active_drums_str = data.get('Baterias_Ativadas', "Nenhuma")
+        
+        if active_drums_str == "Nenhuma":
+            self.active_drums_list = []
+        else:
+            # Transforma a string "Drum 1, Drum 3" em ['Drum 1', 'Drum 3']
+            self.active_drums_list = [drum.strip() for drum in active_drums_str.split(',')]
 
     def update_camera_data(self, data):
         """ Recebe os dados da câmera e os exibe no terminal de debug. """
+
+        self._process_camera_hits(data)
+        
+        # OBTÉM O VETOR DE STATUS AGORA (CHAMADA À FUNÇÃO MODIFICADA)
+        drum_vector = self.get_active_drum_keys() # Ex: [1, 0, 0, 0]
+
         # Só atualiza se o terminal de debug estiver checado
         if not self.debug_group.isChecked():
             return
@@ -887,6 +936,32 @@ class MainMenuScreen(Screen):
         # Atualiza o terminal
         self.sensor_output.setHtml(texto)
 
+    def get_active_drum_keys(self):
+        """ 
+        Retorna o status atual dos tambores em um vetor de 4 posições.
+        [Drum 1, Drum 2, Drum 3, Drum 4]
+        """
+        # Inicializa o vetor de status com 0s
+        drum_status_vector = [0, 0, 0, 0]
+        
+        # Percorre a lista de hits ativos (ex: ['Drum 1', 'Drum 3'])
+        for drum_key in self.active_drums_list:
+            try:
+                drum_number = int(drum_key.split(' ')[-1])
+                
+                if 1 <= drum_number <= 4:
+                    index = drum_number - 1
+                    drum_status_vector[index] = 1 
+            except (ValueError, IndexError):
+                continue
+                
+        return drum_status_vector
+    
+    def get_selected_instrument(self):
+        """ Retorna o texto do item selecionado no ComboBox de Instrumento. """
+        return self.instrument_combo.currentText()
+    
+    
 # =======================================================================
 # --- LÓGICA DA CÂMERA INTEGRADA (PyQt + OpenCV + MediaPipe) ---
 # =======================================================================
@@ -936,6 +1011,8 @@ class CameraWidget(QWidget):
         layout.addWidget(self.video_label)
         self.setLayout(layout)
 
+        self.show_video_feed = False
+        
         # --- Configuração da Câmera e MediaPipe ---
         self.cap = None
         self.mp_pose = mp.solutions.pose
@@ -963,16 +1040,23 @@ class CameraWidget(QWidget):
     def start_camera(self):
         """ Inicializa a captura da câmera e o timer. """
         if self.cap is None or not self.cap.isOpened():
-            # Tenta abrir o dispositivo 0
             self.cap = cv2.VideoCapture(0)
             if not self.cap.isOpened():
-                self.video_label.setText("Erro ao abrir a câmera (cv2.VideoCapture(0))")
+                # Altera o texto de acordo com o estado de exibição
+                text = "Erro ao abrir a câmera (cv2.VideoCapture(0))"
+                if self.show_video_feed:
+                    self.video_label.setText(text)
+                else:
+                    print(f"ATENÇÃO: {text}") # Apenas imprime se não for visível
                 return
 
         self.timer.start(30) # Aprox. 33ms para 30 FPS
 
     def stop_camera(self):
-        """ Para o timer e libera o objeto de captura. """
+        """ Para o timer E libera o objeto de captura. """
+        # Opcional: Se você quiser que a câmera rode em background para sempre, 
+        # remova esta função e a chamada dela no closeEvent, mas manteremos
+        # o padrão de desligar para liberar recursos.
         self.timer.stop()
         if self.cap:
             self.cap.release()
@@ -1132,6 +1216,12 @@ class CameraWidget(QWidget):
             Qt.KeepAspectRatio
         )
         self.video_label.setPixmap(scaled_pixmap)
+
+        else:
+            # Se a visualização estiver desligada, apenas garante que o label
+            # mostre o status correto se a câmera estiver ativada, mas não mostrando.
+            # (O label já foi limpo em set_feedback_visible(False))
+            pass
 
     def closeEvent(self, event):
         """ Garante que a câmera seja liberada ao fechar o widget. """
