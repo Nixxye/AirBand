@@ -72,7 +72,6 @@ class InstrumentWorker(QThread):
             if self.current_instrument == "Guitarra (Luva)":
                 self.guitar.process_data(
                     logical_data, 
-                    None, 
                     self.sensor_mappings, 
                     self.emulator
                 )
