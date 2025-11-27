@@ -1,7 +1,5 @@
 import math
 import json
-import cv2
-import mediapipe as mp
 import numpy as np
 import sys
 
@@ -19,7 +17,8 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSlot, pyqtSignal
 from communication import Communication
 from emulator import Emulator
 from instruments import Guitar, Drum
-from worker import InstrumentWorker  # <--- Import do Worker
+from worker import InstrumentWorker
+from camera import CameraProcessor
 
 import pyqtgraph as pg
 from collections import deque
@@ -225,8 +224,7 @@ class MainApplication(QMainWindow):
         self.guitar = Guitar()
         self.drum = Drum()
 
-        # --- 2. Instancia e Inicia o WORKER (Thread de Processamento) ---
-        # O worker assume o loop pesado de verificar sensores e acionar emulador
+        # --- 2. Instancia o WORKER (Thread de Processamento) ---
         self.worker = InstrumentWorker(
             self.communication, 
             self.guitar, 
@@ -234,7 +232,6 @@ class MainApplication(QMainWindow):
             self.emulator
         )
         self.worker.update_mappings(self.sensor_mappings) # Passa config inicial
-        self.worker.start() # Inicia loop de alta frequência
 
         # --- 3. Configuração da UI ---
         self.tabs = QTabWidget(self)
@@ -254,10 +251,23 @@ class MainApplication(QMainWindow):
         self.setCentralWidget(self.tabs)
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        # --- 4. Timers da Interface (Apenas Visualização) ---
+        # --- 4. CONEXÕES CRÍTICAS (Sinais -> Worker) ---
+        # Conecta o sinal de dados da Câmera (que está dentro da aba Menu) ao método do Worker
+        self.main_menu_tab.camera_widget.camera_data_signal.connect(self.worker.update_camera_data)
+
+        # Conecta a troca de instrumento (ComboBox) ao método do Worker
+        self.main_menu_tab.instrument_combo.currentTextChanged.connect(self.worker.set_instrument)
+        
+        # Define o estado inicial do instrumento no worker para não começar nulo
+        initial_instrument = self.main_menu_tab.instrument_combo.currentText()
+        self.worker.set_instrument(initial_instrument)
+
+        # Inicia a thread APÓS configurar as conexões
+        self.worker.start()
+
+        # --- 5. Timers da Interface (Apenas Visualização) ---
         
         # Timer Visual: Atualiza apenas os textos de debug na tela.
-        # 30ms (~33FPS) é suficiente para o olho humano.
         self.ui_timer = QTimer(self)
         self.ui_timer.timeout.connect(self.update_ui_visuals)
         self.ui_timer.start(30) 
@@ -269,7 +279,6 @@ class MainApplication(QMainWindow):
 
         self._check_network_status()
         self.on_tab_changed(self.tabs.currentIndex())
-
     def on_tab_changed(self, index):
         """ Inicia/para o timer da aba de calibração quando ela é selecionada/desselecionada """
         current_widget = self.tabs.widget(index)
@@ -326,39 +335,39 @@ class MainApplication(QMainWindow):
         agora ocorre dentro de 'self.worker'.
         """
         # Obtém cópia thread-safe dos dados apenas para mostrar na tela
-        raw_data = self.communication.get_latest_data()
+        # raw_data = self.communication.get_latest_data()
 
-        # Passa dados para o terminal na aba "Controle"
-        self.main_menu_tab.update_sensor_data(raw_data)
+        # # Passa dados para o terminal na aba "Controle"
+        # self.main_menu_tab.update_sensor_data(raw_data)
 
         # 1. Se o instrumento selecionado é Guitarra (Luva)
-        if self.main_menu_tab.get_selected_instrument() == "Guitarra (Luva)":
-            # ... (código existente para processar dados da luva) ...
+        # if self.main_menu_tab.get_selected_instrument() == "Guitarra (Luva)":
+        #     # ... (código existente para processar dados da luva) ...
 
-            logical_data = {}
-            if self.communication.connected:
-                # ... (lógica de mapeamento da luva) ...
+        #     logical_data = {}
+        #     if self.communication.connected:
+        #         logical_data = raw_data.copy()
                 
-                # Processamento da Guitarra
-                if logical_data:
-                    self.guitar.process_data(
-                        logical_data, 
-                        self.sensor_mappings, 
-                        self.emulator
-                    )
+        #         # Processamento da Guitarra
+        #         if logical_data:
+        #             self.guitar.process_data(
+        #                 logical_data, 
+        #                 self.sensor_mappings, 
+        #                 self.emulator
+        #             )
 
-        # 2. Se o instrumento selecionado é Bateria (Camera)
-        elif self.main_menu_tab.get_selected_instrument() == "Bateria (Camera)":
+        # # 2. Se o instrumento selecionado é Bateria (Camera)
+        # elif self.main_menu_tab.get_selected_instrument() == "Bateria (Camera)":
             
-            # Pega a lista de hits ativos da MainMenuScreen
-            active_drums = self.main_menu_tab.get_active_drum_keys()
+        #     # Pega a lista de hits ativos da MainMenuScreen
+        #     active_drums = self.main_menu_tab.get_active_drum_keys()
             
-            # Processa os hits na classe Drum
-            self.drum.process_data(
-                logical_data,
-                active_drums, 
-                self.emulator
-            )
+        #     # Processa os hits na classe Drum
+        #     # self.drum.process_data(
+        #     #     logical_data,
+        #     #     active_drums, 
+        #     #     self.emulator
+        #     # )
 
     def closeEvent(self, event):
         """ Garante encerramento limpo de todas as threads. """
@@ -911,14 +920,12 @@ class MainMenuScreen(Screen):
             self.active_drums_list = [drum.strip() for drum in active_drums_str.split(',')]
 
     def update_camera_data(self, data):
-        """ Recebe os dados da câmera e os exibe no terminal de debug. """
-
-        self._process_camera_hits(data)
+        """ Recebe os dados da câmera e atualiza o estado interno. """
         
-        # OBTÉM O VETOR DE STATUS AGORA (CHAMADA À FUNÇÃO MODIFICADA)
-        drum_vector = self.get_active_drum_keys() # Ex: [1, 0, 0, 0]
+        # 1. Salva o vetor bruto que veio da câmera para uso rápido
+        self.current_drum_vector = data.get("Drum_Vector", [0, 0, 0, 0])
 
-        # Só atualiza se o terminal de debug estiver checado
+        # 2. Atualiza UI (Debug)
         if not self.debug_group.isChecked():
             return
 
@@ -934,30 +941,14 @@ class MainMenuScreen(Screen):
         hit_color = "#FF4444" if data['Baterias_Ativadas'] != "Nenhuma" else "#AAAAAA"
         texto += f"<span style='color:{hit_color}; font-weight:bold;'>HITS:</span> {data['Baterias_Ativadas']}\n"
 
-        # Atualiza o terminal
         self.sensor_output.setHtml(texto)
 
     def get_active_drum_keys(self):
-        """ 
-        Retorna o status atual dos tambores em um vetor de 4 posições.
-        [Drum 1, Drum 2, Drum 3, Drum 4]
         """
-        # Inicializa o vetor de status com 0s
-        drum_status_vector = [0, 0, 0, 0]
-        
-        # Percorre a lista de hits ativos (ex: ['Drum 1', 'Drum 3'])
-        for drum_key in self.active_drums_list:
-            try:
-                drum_number = int(drum_key.split(' ')[-1])
-                
-                if 1 <= drum_number <= 4:
-                    index = drum_number - 1
-                    drum_status_vector[index] = 1 
-            except (ValueError, IndexError):
-                continue
-                
-        return drum_status_vector
-    
+        Retorna o vetor de ativação dos tambores diretamente.
+        """
+        return self.current_drum_vector
+
     def get_selected_instrument(self):
         """ Retorna o texto do item selecionado no ComboBox de Instrumento. """
         return self.instrument_combo.currentText()
@@ -993,238 +984,81 @@ def linha_tracejada(img, p1, p2, cor, espessura=1, tamanho_tracejado=10):
 
 class CameraWidget(QWidget):
     """
-    Widget que exibe o feed da câmera usando OpenCV e QTimer,
-    processando o frame com MediaPipe.
+    Widget PyQt que gerencia a exibição da imagem da câmera.
+    Delega o processamento pesado para CameraProcessor.
     """
     camera_data_signal = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-
-        self.w, self.h = 640, 480 # Resolução padrão
-        self.setFixedSize(self.w, self.h)
-
-        # --- Configuração do Layout e Label ---
-        layout = QVBoxLayout(self)
-        self.video_label = QLabel("Aguardando Câmera...")
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setFixedSize(self.w, self.h)
-        layout.addWidget(self.video_label)
-        self.setLayout(layout)
-
-        self.show_video_feed = False
+        self.processor = CameraProcessor()
         
-        # --- Configuração da Câmera e MediaPipe ---
-        self.cap = None
-        self.mp_pose = mp.solutions.pose
-        self.pose_processor = self.mp_pose.Pose(
-            min_detection_confidence=0.5, 
-            min_tracking_confidence=0.5
-        )
-        self.mp_drawing = mp.solutions.drawing_utils
+        self.w, self.h = 640, 480
+        self.setFixedSize(self.w, self.h)
+        self.show_video_feed = False # Controla se atualiza a tela ou roda em background
 
-        self.circulos = [
-            {'center': [0.1, 0.8], 'raio': 40, 'cor': (255, 0, 0)},
-            {'center': [0.3, 0.8], 'raio': 40, 'cor': (255, 0, 0)},
-            {'center': [0.7, 0.8], 'raio': 40, 'cor': (255, 0, 0)},
-            {'center': [0.9, 0.8], 'raio': 40, 'cor': (255, 0, 0)}
-        ] # Posições normalizadas e raio em pixels
-
-        self.limite_angulo_vert = 130.0
-        self.limite_angulo_cotovelo = 150.0
-        self.delta_limite = 2.0
-
-        # Timer
+        # Layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+        
+        self.video_label = QLabel("Câmera Desligada")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setStyleSheet("background-color: #111; color: #555;")
+        layout.addWidget(self.video_label)
+        
+        # Timer de Atualização (30 FPS)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_frame)
 
     def start_camera(self):
-        """ Inicializa a captura da câmera e o timer. """
-        if self.cap is None or not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(0)
-            if not self.cap.isOpened():
-                # Altera o texto de acordo com o estado de exibição
-                text = "Erro ao abrir a câmera (cv2.VideoCapture(0))"
-                if self.show_video_feed:
-                    self.video_label.setText(text)
-                else:
-                    print(f"ATENÇÃO: {text}") # Apenas imprime se não for visível
-                return
-
-        self.timer.start(30) # Aprox. 33ms para 30 FPS
+        """ Liga a câmera e o timer. """
+        if self.processor.start():
+            self.timer.start(30)
+            self.set_feedback_visible(False) # Inicia rodando mas escondido por padrão
+        else:
+            self.video_label.setText("Erro ao abrir câmera!")
 
     def stop_camera(self):
-        """ Para o timer E libera o objeto de captura. """
-        # Opcional: Se você quiser que a câmera rode em background para sempre, 
-        # remova esta função e a chamada dela no closeEvent, mas manteremos
-        # o padrão de desligar para liberar recursos.
+        """ Para tudo e libera recursos. """
         self.timer.stop()
-        if self.cap:
-            self.cap.release()
-            self.cap = None
-            self.video_label.setText("Câmera Desligada")
+        self.processor.stop()
+        self.video_label.setText("Câmera Desligada")
+        self.video_label.clear()
 
-    # Dentro da classe CameraWidget...
-
-    def to_pixel(self, landmark, w, h):
-        """ Converte coordenadas normalizadas do MediaPipe para pixels. """
-        return int(landmark.x * w), int(landmark.y * h)
+    def set_feedback_visible(self, visible):
+        """ Liga/Desliga apenas a renderização visual (economiza CPU/GPU). """
+        self.show_video_feed = visible
+        if visible:
+            self.video_label.setText("Carregando feed...")
+        else:
+            self.video_label.clear()
+            self.video_label.setText("Câmera rodando em background...")
 
     @pyqtSlot()
     def update_frame(self):
-        """ Lê, processa com MediaPipe (incluindo lógica de ângulos) e exibe. """
-        ret, frame = self.cap.read()
-        if not ret:
+        """ Loop principal chamado pelo Timer. """
+        # Processa a lógica (Sempre roda para detectar movimentos)
+        frame_rgb, data = self.processor.process_frame()
+        
+        if frame_rgb is None: # Se a câmera caiu ou acabou
             self.stop_camera()
             return
 
-        # 1. Pré-processamento
-        frame = cv2.flip(frame, 1) # Espelha a imagem
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image.flags.writeable = False
+        # Emite sinal com dados lógicos (para o emulador de bateria)
+        self.camera_data_signal.emit(data)
 
-        # 2. Processamento MediaPipe
-        results = self.pose_processor.process(image)
-
-        # 3. Desenho e Lógica
-        image.flags.writeable = True
-        # Converter para BGR para que o OpenCV possa desenhar nele (incluindo o texto)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
-        h, w, _ = image.shape
-        pulso_esq = pulso_dir = (-100, -100) # Inicializa fora da tela
-
-        if results.pose_landmarks:
-            landmarks = results.pose_landmarks.landmark
-
-            # Obtém Landmarks
-            l_sh = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value], w, h)
-            l_el = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.LEFT_ELBOW.value], w, h)
-            l_wr = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST.value], w, h)
-            r_sh = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value], w, h)
-            r_el = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.RIGHT_ELBOW.value], w, h)
-            r_wr = self.to_pixel(landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST.value], w, h)
-
-            pulso_esq, pulso_dir = l_wr, r_wr # Atualiza a posição dos pulsos
-
-            # CÁLCULOS DE ÂNGULO (Cotovelo e Vertical)
-            ang_esq = calcular_angulo(l_sh, l_el, l_wr)
-            ang_dir = calcular_angulo(r_sh, r_el, r_wr)
-
-            l_vert = (l_sh[0], l_sh[1] - 150) # Ponto auxiliar vertical (fixo)
-            r_vert = (r_sh[0], r_sh[1] - 150)
-            ang_esq_vert = calcular_angulo(l_el, l_sh, l_vert)
-            ang_dir_vert = calcular_angulo(r_el, r_sh, r_vert)
-
-            # LÓGICA DE COR (Limites)
-            cor_esq_vert = (0, 255, 128)
-            cor_dir_vert = (255, 128, 0)
-
-            if ang_esq_vert < self.limite_angulo_vert: # Se o ângulo está dentro do limite de toque
-                cor_esq_vert = (0, 0, 255) # Cor de 'toque'
-            if ang_dir_vert < self.limite_angulo_vert:
-                cor_dir_vert = (0, 0, 255)
-
-            cor_esq_cot = (0, 255, 0)
-            cor_dir_cot = (0, 255, 255)
-            if ang_esq > self.limite_angulo_cotovelo:
-                cor_esq_cot = (255, 0, 255)
-            if ang_dir > self.limite_angulo_cotovelo:
-                cor_dir_cot = (255, 0, 255)
-
-            # DESENHO DE LINHAS
-            cv2.line(image, l_sh, l_el, (0, 255, 0), 3)
-            cv2.line(image, l_el, l_wr, (0, 255, 0), 3)
-            cv2.line(image, r_sh, r_el, (0, 255, 255), 3)
-            cv2.line(image, r_el, r_wr, (0, 255, 255), 3)
-
-            linha_tracejada(image, l_sh, l_vert, (200, 200, 200), espessura=1)
-            linha_tracejada(image, r_sh, r_vert, (200, 200, 200), espessura=1)
-
-            # DESENHO DE CÍRCULOS (Landmarks)
-            cv2.circle(image, l_sh, 8, cor_esq_vert, -1)
-            cv2.circle(image, l_el, 8, cor_esq_cot, -1)
-            cv2.circle(image, l_wr, 8, (0, 200, 200), -1)
-            cv2.circle(image, r_sh, 8, cor_dir_vert, -1)
-            cv2.circle(image, r_el, 8, cor_dir_cot, -1)
-            cv2.circle(image, r_wr, 8, (0, 200, 255), -1)
-
-            # TEXTO DOS ÂNGULOS
-            cv2.putText(image, f"{ang_esq:.1f}°", (l_el[0]+10, l_el[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_esq_cot, 2)
-            cv2.putText(image, f"{ang_esq_vert:.1f}°", (l_sh[0]+10, l_sh[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_esq_vert, 2)
-            cv2.putText(image, f"{ang_dir:.1f}°", (r_el[0]+10, r_el[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_dir_cot, 2)
-            cv2.putText(image, f"{ang_dir_vert:.1f}°", (r_sh[0]+10, r_sh[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_dir_vert, 2)
-
-            # TEXTO DE DEBUG NO CANTO
-            cv2.putText(image, f"Vert Esq (ombro): {ang_esq_vert:.1f}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_esq_vert, 2)
-            cv2.putText(image, f"Vert Dir (ombro): {ang_dir_vert:.1f}", (10, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_dir_vert, 2)
-            cv2.putText(image, f"Limite vertical: {self.limite_angulo_vert:.1f} graus", (10, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
-
-        # DESENHO DOS TAMBORES VIRTUAIS
-        for c in self.circulos:
-            cx = int(c['center'][0] * w) # Usa o centro normalizado
-            cy = int(c['center'][1] * h)
-            cor = c['cor']
-
-            # Checa a colisão do pulso com o tambor (adapte esta lógica de pulso para a sua simulação real)
-            for pulso in [pulso_esq, pulso_dir]:
-                dist = math.hypot(pulso[0] - cx, pulso[1] - cy)
-                if dist <= c['raio']:
-                    cor = (0, 0, 255) # Cor de 'hit'
-
-        hits = [] # Inicializa a lista de hits UMA VEZ antes do loop
-        for i, c in enumerate(self.circulos):
-            cx = int(c['center'][0] * w) 
-            cy = int(c['center'][1] * h)
-            cor = c['cor'] # Cor padrão
-
-            is_hit = False
-            # Verifica se algum pulso (punho esquerdo ou direito) está dentro do raio
-            for pulso in [pulso_esq, pulso_dir]:
-                # Só checa se o pulso foi detectado (coordenadas positivas)
-                if pulso[0] > 0 and pulso[1] > 0:
-                    dist = math.hypot(pulso[0] - cx, pulso[1] - cy)
-                    if dist <= c['raio']:
-                        is_hit = True
-                        break
-
-            if is_hit:
-                hits.append(f"Drum {i+1}") # Coleta o hit para o signal
-                cor = (0, 0, 255) # Cor de 'hit' para o desenho (TODOS os hits)
-
-            # Desenha o círculo no frame
-            cv2.circle(image, (cx, cy), c['raio'], cor, 2)
-
-        camera_data = {
-            "Angulo_Esq_Cotovelo": ang_esq,
-            "Angulo_Dir_Cotovelo": ang_dir,
-            "Angulo_Esq_Vert": ang_esq_vert,
-            "Angulo_Dir_Vert": ang_dir_vert,
-            "Baterias_Ativadas": ", ".join(hits) if hits else "Nenhuma",
-            "Limite_Vert": self.limite_angulo_vert,
-            "Camera_Ativa": True
-        }
-        self.camera_data_signal.emit(camera_data)
-
-        # 4. Exibir no Qt (agora convertendo o frame BGR para RGB novamente)
-        rgb_display = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        bytes_per_line = 3 * w
-        qt_image = QImage(rgb_display.data, w, h, bytes_per_line, QImage.Format_RGB888)
-
-        # Redimensiona o pixmap para o tamanho do label
-        scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
-            self.video_label.size(), 
-            Qt.KeepAspectRatio
-        )
-        self.video_label.setPixmap(scaled_pixmap)
-
-        # else:
-        #     # Se a visualização estiver desligada, apenas garante que o label
-        #     # mostre o status correto se a câmera estiver ativada, mas não mostrando.
-        #     # (O label já foi limpo em set_feedback_visible(False))
-        #     pass
+        # Atualiza a GUI apenas se o usuário pediu para ver
+        if self.show_video_feed:
+            h, w, ch = frame_rgb.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            
+            # Escala para o tamanho do widget
+            scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+                self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            self.video_label.setPixmap(scaled_pixmap)
 
     def closeEvent(self, event):
-        """ Garante que a câmera seja liberada ao fechar o widget. """
         self.stop_camera()
         super().closeEvent(event)

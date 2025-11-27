@@ -1,11 +1,7 @@
-from PyQt5.QtCore import QThread
+from PyQt5.QtCore import QThread, QMutex
 import time
 
 class InstrumentWorker(QThread):
-    """
-    Thread dedicada ao processamento de alta frequência dos instrumentos.
-    Isola a lógica matemática da Interface Gráfica (GUI).
-    """
     def __init__(self, communication, guitar, drum, emulator):
         super().__init__()
         self.comm = communication
@@ -14,9 +10,24 @@ class InstrumentWorker(QThread):
         self.emulator = emulator
         self.running = True
         self.sensor_mappings = {} 
+        
+        # --- NOVO: Estado e Dados da Câmera ---
+        self.current_instrument = "Guitarra (Luva)" # Default
+        self.camera_data = {"Drum_Vector": [0,0,0,0]} # Buffer seguro
+        self.data_mutex = QMutex() # Para evitar leitura/escrita simultânea
 
     def update_mappings(self, new_mappings):
         self.sensor_mappings = new_mappings
+
+    def set_instrument(self, instrument_name):
+        """ Chamado pela UI quando o usuário troca o combobox. """
+        self.current_instrument = instrument_name
+
+    def update_camera_data(self, data):
+        """ Chamado pela UI (CameraWidget) sempre que chega um frame novo. """
+        self.data_mutex.lock()
+        self.camera_data = data
+        self.data_mutex.unlock()
 
     def stop(self):
         self.running = False
@@ -24,53 +35,53 @@ class InstrumentWorker(QThread):
         self.wait()
 
     def run(self):
-        """ Loop principal de processamento (Event-Driven). """
         while self.running:
-            # Espera até chegar um pacote novo (bloqueante com timeout para não travar ao fechar)
             has_data = self.comm.wait_for_data(timeout=0.1)
             
+            # Mesmo sem dados da luva, a bateria precisa rodar (câmera)
+            # Mas vamos manter sincronizado com a luva por enquanto para simplificar o loop
             if not has_data:
                 continue
 
             raw_data = self.comm.get_latest_data()
             logical_data = {}
             
-            # --- 1. PASSO CRÍTICO: Copiar Vetores Brutos ---
-            # A lógica vetorial precisa acessar tanto Accel (Direção) quanto Gyro (Gatilho)
-            
+            # 1. Copia dados brutos (Accel + Gyro)
             essential_keys = [
-                # --- Mestra ---
-                'gyro_ax', 'gyro_ay', 'gyro_az',  # Acelerômetro
-                'gyro_gx', 'gyro_gy', 'gyro_gz',  # Giroscópio <--- ADICIONADO
-                
-                # --- Escrava ---
-                'slave_ax', 'slave_ay', 'slave_az', # Acelerômetro
-                'slave_gx', 'slave_gy', 'slave_gz'  # Giroscópio <--- ADICIONADO
+                'gyro_ax', 'gyro_ay', 'gyro_az', 'gyro_gx', 'gyro_gy', 'gyro_gz',
+                'slave_ax', 'slave_ay', 'slave_az', 'slave_gx', 'slave_gy', 'slave_gz'
             ]
-            
             for k in essential_keys:
-                if k in raw_data:
-                    logical_data[k] = raw_data[k]
+                if k in raw_data: logical_data[k] = raw_data[k]
 
-            # --- 2. Copiar Mapeamentos Lógicos (ADC / Dedos) ---
+            # 2. Copia Mapeamentos (Dedos)
             for action, mapping in self.sensor_mappings.items():
-                raw_key = mapping.get("key")       # Ex: "adc_v32"
-
+                raw_key = mapping.get("key")
                 if raw_key and raw_key in raw_data:
                     logical_data[action] = raw_data[raw_key]
 
-            # --- 3. Processamento ---
-            if logical_data:
-                # Aqui você escolhe qual lógica rodar (Guitarra ou Bateria)
-                # Como estamos focando na batida (strum), usaremos a Drum.process_data
-                # que contém a lógica nova de Giroscópio + Acelerômetro
-                
-                self.drum.process_data(
+            # 3. Pega dados mais recentes da câmera (Thread-Safe)
+            self.data_mutex.lock()
+            current_camera_data = self.camera_data.copy()
+            self.data_mutex.unlock()
+            
+            # Pega o vetor de bateria [0, 1, 0, 0]
+            active_drums = current_camera_data.get("Drum_Vector", [0,0,0,0])
+
+            # 4. Lógica Condicional (Seleção de Instrumento)
+            if self.current_instrument == "Guitarra (Luva)":
+                self.guitar.process_data(
                     logical_data, 
-                    None,
+                    None, 
                     self.sensor_mappings, 
                     self.emulator
                 )
-                
-                # Se precisar processar os dedos da guitarra também:
-                # self.guitar.process_data(...)
+            
+            elif self.current_instrument == "Bateria (Camera)":
+                # A bateria precisa tanto da câmera (active_drums) quanto da luva (logical_data para o bumbo/pedal)
+                self.drum.process_data(
+                    logical_data, 
+                    active_drums, # Passa o vetor da câmera
+                    self.sensor_mappings, 
+                    self.emulator
+                )
