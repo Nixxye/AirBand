@@ -354,7 +354,8 @@ class MainApplication(QMainWindow):
             active_drums = self.main_menu_tab.get_active_drum_keys()
             
             # Processa os hits na classe Drum
-            self.drum.process_camera_data(
+            self.drum.process_data(
+                logical_data,
                 active_drums, 
                 self.emulator
             )
