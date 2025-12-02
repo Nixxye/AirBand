@@ -728,6 +728,8 @@ class MainMenuScreen(Screen):
 
         self.instrument_combo = QComboBox()
         self.instrument_combo.addItems(["Guitarra (Luva)", "Bateria (Camera)"])
+        # ✅ NOVO: Conecta a mudança do combobox ao worker
+        self.instrument_combo.currentTextChanged.connect(self.on_instrument_changed)
         config_layout.addRow(QLabel("<b>Instrumento:</b>"), self.instrument_combo)
 
         self.output_combo = QComboBox()
@@ -777,6 +779,18 @@ class MainMenuScreen(Screen):
         )
         general_layout.addWidget(self.instructions_btn)
 
+        # Botão para alternar transparência da janela principal (50% / 100%)
+        self.transparent_btn = QPushButton("Alternar Transparência (50%)")
+        self.transparent_btn.setCheckable(True)
+        self.transparent_btn.clicked.connect(self.toggle_transparency)
+        general_layout.addWidget(self.transparent_btn)
+
+        # Botão para manter a janela sempre acima das outras
+        self.always_on_top_btn = QPushButton("Manter Sempre Acima (OFF)")
+        self.always_on_top_btn.setCheckable(True)
+        self.always_on_top_btn.clicked.connect(self.toggle_always_on_top)
+        general_layout.addWidget(self.always_on_top_btn)
+
         left_column.addWidget(general_group)
         left_column.addStretch() 
 
@@ -799,6 +813,8 @@ class MainMenuScreen(Screen):
         self.camera_widget = CameraWidget(self) 
         # Conecta sinal para atualizar dados locais e debug
         self.camera_widget.camera_data_signal.connect(self.update_camera_data)
+        # ✅ NOVO: Conecta também ao worker
+        self.camera_widget.camera_data_signal.connect(self.main_app.worker.update_camera_data)
         
         # Inicia Câmera IMEDIATAMENTE (para detecção em background)
         self.camera_widget.start_camera()
@@ -893,6 +909,29 @@ class MainMenuScreen(Screen):
     def get_selected_instrument(self):
         """ Retorna o texto do item selecionado no ComboBox de Instrumento. """
         return self.instrument_combo.currentText()
+    def on_instrument_changed(self, instrument_name):
+        """ Chamado quando o usuário muda o combobox de instrumento. """
+        print(f"✅ [UI] Instrumento alterado para: {instrument_name}")
+        self.main_app.worker.set_instrument(instrument_name)
+
+    def toggle_transparency(self, checked: bool):
+        """ Alterna opacidade da janela principal entre 1.0 e 0.5. """
+        if checked:
+            self.main_app.setWindowOpacity(0.2)
+            self.transparent_btn.setText("Restaurar Opacidade (100%)")
+        else:
+            self.main_app.setWindowOpacity(1.0)
+            self.transparent_btn.setText("Alternar Transparência (70%)")
+
+    def toggle_always_on_top(self, checked: bool):
+        """ Alterna a flag 'sempre acima' da janela principal. """
+        # Define/limpa a flag e reaplica exibindo a janela para forçar atualização
+        self.main_app.setWindowFlag(Qt.WindowStaysOnTopHint, checked)
+        self.main_app.show()
+        if checked:
+            self.always_on_top_btn.setText("Manter Sempre Acima (ON)")
+        else:
+            self.always_on_top_btn.setText("Manter Sempre Acima (OFF)")
     # =======================================================================
     # --- LÓGICA DA CÂMERA INTEGRADA (PyQt + OpenCV + MediaPipe) ---
     # =======================================================================

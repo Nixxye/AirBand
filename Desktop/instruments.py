@@ -18,81 +18,20 @@ class Drum(Instrument):
 
     def process_data(self, logical_data, camera_data, mappings, emulator):
         """
-        Processamento Vetorial de Giroscópio (3 Eixos).
-        Usa Projeção Escalar para detectar similaridade de direção e intensidade.
+        Processamento exclusivo da CÂMERA para Bateria.
+        Ignora o giroscópio.
         """
-        import math
-        import time
-        current_time = time.time()
-
-        STRUM_COOLDOWN = 0.12
-        print("🥁 Processando dados da bateria...")
-
-        strum_actions = ["Batida (Mestra)", "Batida (Escrava)"]
-
-        for action_name in strum_actions:
-            if action_name not in mappings: continue
-            
-            calib = mappings[action_name]
-            
-            # Recupera o vetor calibrado (Down)
-            cal_vec = calib.get("vector") # {gx, gy, gz}
-            if not cal_vec: continue
-
-            prefix = calib.get("key_prefix", "gyro_")
-            
-            # 1. Monta o Vetor Calibrado (Referência)
-            rx = cal_vec.get("gx", 0)
-            ry = cal_vec.get("gy", 0)
-            rz = cal_vec.get("gz", 0)
-            
-            # Magnitude do vetor de referência
-            ref_mag = math.sqrt(rx**2 + ry**2 + rz**2)
-            if ref_mag == 0: continue
-
-            # 2. Monta o Vetor Atual (Live)
-            # Verifica se os dados existem no pacote
-            if f"{prefix}gx" not in logical_data: continue
-            
-            cx = logical_data[f"{prefix}gx"]
-            cy = logical_data[f"{prefix}gy"]
-            cz = logical_data[f"{prefix}gz"]
-
-            # 3. CÁLCULO DA PROJEÇÃO (Dot Product)
-            # Projetamos o vetor Atual sobre o vetor de Referência Normalizado.
-            # Isso nos diz "Quanto de força existe na direção da batida calibrada?"
-            
-            # Dot Product (A . B)
-            dot_product = (cx * rx) + (cy * ry) + (cz * rz)
-            
-            # Projeção Escalar = (A . B) / |B|
-            # Isso retorna um valor na mesma escala dos dados brutos (ex: 5000, 10000)
-            projection_value = dot_product / ref_mag
-            
-            # 4. Verifica Limiar
-            threshold = 26000
-            
-            # Se projeção for muito positiva -> Movimento igual ao calibrado (DOWN)
-            # Se projeção for muito negativa -> Movimento oposto ao calibrado (UP)
-            
-            if abs(projection_value) > threshold:
-                
-                cooldown_key = f"{action_name}_strum"
-                last_time = self.last_strum_time.get(cooldown_key, 0)
-
-                if (current_time - last_time) > STRUM_COOLDOWN:
-                    
-                    direction = "DOWN" if projection_value > 0 else "UP"
-                    
-                    print(f"🎸 {action_name} -> {direction} (Força Projetada: {abs(projection_value):.0f})")
-
-                    # if direction == "DOWN":
-                    #     emulator.strum_down()
-                    # else:
-                    #     emulator.strum_up()
-                    
-                    self.last_strum_time[cooldown_key] = current_time
-
+        print("🥁 Processando dados da bateria (CÂMERA)...")
+        
+        # ✅ NOVO: Enviar o vetor da câmera diretamente para o emulador
+        if camera_data:
+            # camera_data é o Drum_Vector [0, 1, 0, 0] da câmera
+            print(f"🥁 [DRUM] Recebeu camera_data: {camera_data}")
+            print(f"🥁 [DRUM] Enviando para emulador: {camera_data}")
+            emulator.atualizar_estado(camera_data)
+        else:
+            print(f"🥁 [DRUM] camera_data é None ou vazio!")
+            emulator.atualizar_estado([0, 0, 0, 0])  # Desativa tudo se não houver câmera
 class Guitar(Instrument):
     def __init__(self):
         super().__init__()

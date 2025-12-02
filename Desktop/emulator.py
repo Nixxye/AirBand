@@ -122,13 +122,11 @@ class Emulator:
     def atualizar_estado(self, novo_estado: List[int]):
         """
         Método principal para atualizar o estado de emulação.
-        Args:
-            novo_estado: Vetor de 4 posições: [Verde, Vermelho, Amarelo, Azul]
-                         com valores booleanos (0 ou 1).
-            Ex: [1, 0, 0, 0] para o botão Verde pressionado.
         """
         if novo_estado != self.estado_anterior:
-            print(f"\nAtualizando estado para: {novo_estado}")
+            print(f"\n🎮 [EMULATOR] Estado Anterior: {self.estado_anterior}")
+            print(f"🎮 [EMULATOR] Novo Estado: {novo_estado}")
+            print(f"🎮 [EMULATOR] Tipo Emulação: {self.tipo_emulacao}")
         if len(novo_estado) != 4:
             raise ValueError("O novo_estado deve ser um vetor de 4 posições.")
         if not all(isinstance(x, int) and x in [0, 1] for x in novo_estado):

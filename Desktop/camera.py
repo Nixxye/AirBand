@@ -22,11 +22,17 @@ class CameraProcessor:
         # 'center': Posição normalizada [x, y] (0.0 a 1.0)
         # 'raio': Raio em pixels
         self.circulos = [
-            {'center': [0.1, 0.8], 'raio': 40, 'cor': (255, 0, 0)}, # Drum 1
-            {'center': [0.3, 0.8], 'raio': 40, 'cor': (255, 0, 0)}, # Drum 2
-            {'center': [0.7, 0.8], 'raio': 40, 'cor': (255, 0, 0)}, # Drum 3
-            {'center': [0.9, 0.8], 'raio': 40, 'cor': (255, 0, 0)}  # Drum 4
+            {'center': [0.1, 0.85], 'raio': 50, 'cor': (255, 0, 0)}, # Drum 1 (Canto superior esquerdo)
+            {'center': [0.3, 0.85], 'raio': 50, 'cor': (255, 0, 0)},  # Drum 2 (Centro-esquerda)
+            {'center': [0.5, 0.85], 'raio': 50, 'cor': (255, 0, 0)},  # Drum 3 (Centro-direita)
+            {'center': [0.7, 0.85], 'raio': 50, 'cor': (255, 0, 0)} # Drum 4 (Canto superior direito)
         ]
+        self.prev_inside = [False] * len(self.circulos)
+
+        # --- Novos: sustain de hit (manter botão pressionado por mais frames) ---
+        # Ajuste self.hold_frames para aumentar/diminuir a duração (em frames)
+        self.hold_frames = 6  # por padrão ~200ms @30FPS
+        self.hold_counters = [0] * len(self.circulos)
 
         # Limites de ângulos para coloração visual
         self.limite_angulo_vert = 130.0
@@ -150,22 +156,42 @@ class CameraProcessor:
             cy = int(c['center'][1] * h)
             cor = c['cor']
 
-            is_hit = False
-            # Verifica distância dos dois pulsos até o centro do tambor
+            # 1. Verifica se o pulso está ATUALMENTE DENTRO do círculo
+            current_inside = False
             for pulso in [pulso_esq, pulso_dir]:
-                if pulso[0] > 0: # Se o pulso foi detectado (x > 0)
+                if pulso[0] > 0: 
                     dist = math.hypot(pulso[0] - cx, pulso[1] - cy)
                     if dist <= c['raio']:
-                        is_hit = True
+                        current_inside = True
                         break
             
-            if is_hit:
+            # 2. LÓGICA ONE-SHOT (Detecção de borda)
+            if current_inside and not self.prev_inside[i]:
+                # É um NOVO HIT: dispara o evento
                 hits_text.append(f"Drum {i+1}")
-                current_drum_vector[i] = 1  # <--- Preenche o vetor (1 = Ativo)
-                cor = (0, 0, 255) # Muda cor para indicar hit visualmente
+                # Ao invés de apenas um frame, inicializamos o contador de sustain
+                self.hold_counters[i] = self.hold_frames
+                cor = (0, 255, 0) # Cor de novo hit (Verde)
+                
+                # Atualiza o estado: agora está dentro
+                self.prev_inside[i] = True
+                
+            elif not current_inside and self.prev_inside[i]:
+                # Saiu do círculo: reseta o estado para permitir o próximo hit
+                self.prev_inside[i] = False
+                
+            elif current_inside and self.prev_inside[i]:
+                 # Está dentro, mas não é um novo hit (contínuo)
+                 cor = (0, 0, 255) # Cor de contato contínuo (Vermelho)
+            
+            # Se o contador de sustain está ativo, marca o tambor como acionado
+            if self.hold_counters[i] > 0:
+                current_drum_vector[i] = 1
+                self.hold_counters[i] -= 1
             
             # Desenha o tambor
             cv2.circle(image_bgr, (cx, cy), c['raio'], cor, 2)
+            
 
         # Atualiza os dados finais
         if hits_text:

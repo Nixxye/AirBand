@@ -36,14 +36,20 @@ class InstrumentWorker(QThread):
 
     def run(self):
         while self.running:
-            has_data = self.comm.wait_for_data(timeout=0.1)
-            
-            # Mesmo sem dados da luva, a bateria precisa rodar (câmera)
-            # Mas vamos manter sincronizado com a luva por enquanto para simplificar o loop
-            if not has_data:
-                continue
+            # Se for Bateria (Camera), não espera dados da luva
+            if self.current_instrument == "Bateria (Camera)":
+                # Bateria roda a cada 30ms mesmo sem luva
+                time.sleep(0.03)
+            else:
+                # Guitarra espera dados da luva
+                has_data = self.comm.wait_for_data(timeout=0.1)
+                if not has_data:
+                    continue
 
             raw_data = self.comm.get_latest_data()
+            if not raw_data and self.current_instrument != "Bateria (Camera)":
+                continue  # Se for guitarra e não tiver dados, pula
+            
             logical_data = {}
             
             # 1. Copia dados brutos (Accel + Gyro)
@@ -69,6 +75,9 @@ class InstrumentWorker(QThread):
             active_drums = current_camera_data.get("Drum_Vector", [0,0,0,0])
 
             # 4. Lógica Condicional (Seleção de Instrumento)
+            print(f"🎵 [WORKER] Instrumento Atual: {self.current_instrument}")
+            print(f"🔄 [WORKER] Câmera Vetor: {active_drums}")
+            
             if self.current_instrument == "Guitarra (Luva)":
                 self.guitar.process_data(
                     logical_data, 
@@ -77,10 +86,10 @@ class InstrumentWorker(QThread):
                 )
             
             elif self.current_instrument == "Bateria (Camera)":
-                # A bateria precisa tanto da câmera (active_drums) quanto da luva (logical_data para o bumbo/pedal)
+                print(f"🥁 [WORKER] Processando Bateria com vetor: {active_drums}")
                 self.drum.process_data(
-                    logical_data, 
-                    active_drums, # Passa o vetor da câmera
-                    self.sensor_mappings, 
+                    logical_data,
+                    active_drums,
+                    self.sensor_mappings,
                     self.emulator
                 )
