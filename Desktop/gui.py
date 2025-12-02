@@ -678,7 +678,7 @@ class CalibrationScreen(QWidget):
                     max_delta = delta
                     best_key = key
         
-        if best_key and max_delta > 100:
+        if best_key and max_delta > 0.1:
             mapping = {
                 "key": best_key,
                 "rest": rest[best_key],
