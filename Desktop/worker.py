@@ -58,7 +58,7 @@ class InstrumentWorker(QThread):
             for action, mapping in self.sensor_mappings.items():
                 raw_key = mapping.get("key")
                 if raw_key and raw_key in raw_data:
-                    logical_data[action] = raw_data[raw_key]
+                    logical_data[raw_key] = raw_data[raw_key]
 
             # 3. Pega dados mais recentes da câmera (Thread-Safe)
             self.data_mutex.lock()

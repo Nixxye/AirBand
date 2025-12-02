@@ -1,85 +1,42 @@
 {
-    "Batida para Baixo": {
-        "key_prefix": "gyro_",
-        "rest": {
-            "ax": -0.2,
-            "ay": -0.08,
-            "az": 0.95
-        },
-        "peak": {
-            "ax": -0.2,
-            "ay": -0.08,
-            "az": 0.95
-        }
-    },
-    "Batida para Cima": {
-        "key_prefix": "gyro_",
-        "rest": {
-            "ax": -0.04,
-            "ay": -0.12,
-            "az": 0.97
-        },
-        "peak": {
-            "ax": -0.04,
-            "ay": -0.12,
-            "az": 0.97
-        }
-    },
-    "Batida (Girosc\u00f3pio)": {
-        "key_prefix": "gyro_",
-        "rest": {
-            "ax": -94,
-            "ay": 1,
-            "az": -1
-        },
-        "up": {
-            "ax": -2,
-            "ay": -39,
-            "az": 17
-        },
-        "down": {
-            "ax": -199,
-            "ay": 138,
-            "az": 160
-        }
-    },
     "Dedo 1 (Indicador)": {
-        "key": "adc_v33",
-        "rest": 1.8832967281341553,
-        "half": 1.910696029663086,
-        "full": 1.9227839708328247
-    },
-    "Batida (Escrava)": {
-        "key_prefix": "slave_",
-        "vector": {
-            "gx": -25013,
-            "gy": 1367,
-            "gz": -25013
-        },
-        "threshold": 14160.050999908159
+        "key": "adc_v34",
+        "rest": 2.87369966506958,
+        "full": 3.0928938388824463,
+        "crosstalk_ref": {
+            "adc_v32": 0.0,
+            "adc_v33": 1.9090843200683594,
+            "adc_v35": 2.33941388130188
+        }
     },
     "Dedo 2 (M\u00e9dio)": {
-        "key": "adc_v34",
-        "rest": 2.55,
-        "half": 2.623076915740967,
-        "full": 2.9
+        "key": "adc_v35",
+        "rest": 0.0,
+        "full": 2.4312820434570312,
+        "crosstalk_ref": {
+            "adc_v32": 0.0,
+            "adc_v33": 1.6592674255371094,
+            "adc_v34": 2.745567798614502
+        }
     },
     "Dedo 4 (Mindinho)": {
         "key": "adc_v32",
-        "rest": 0,
-        "half": 2.6456410884857178,
-        "full": 1.7
+        "rest": 0.0,
+        "full": 0.620512843132019,
+        "crosstalk_ref": {
+            "adc_v33": 2.5086445808410645,
+            "adc_v34": 2.978461503982544,
+            "adc_v35": 2.2934799194335938
+        }
     },
     "Dedo 3 (Anelar)": {
-        "key": "adc_v35",
-        "rest": 0,
-        "half": 0.5181685090065002,
-        "full": 0.2
-    },
-    "Batida (Mestra)": {
-        "key_prefix": "gyro_",
-        "axis": "gz",
-        "down_sign": -1,
-        "threshold": 10005.2
+        "key": "adc_v33",
+        "rest": 1.8204395771026611,
+        "full": 2.922051191329956,
+        "crosstalk_ref": {
+            "adc_v32": 0.024175824597477913,
+            "adc_v34": 2.9083516597747803,
+            "adc_v35": 2.3345787525177
+        }
     }
 }

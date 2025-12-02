@@ -423,178 +423,185 @@ class InstructionsScreen(Screen):
         self.setLayout(layout)
 
 
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QStackedWidget, QTextEdit, QComboBox, QMessageBox,
+    QSlider, QGroupBox
+)
+from PyQt5.QtCore import QTimer, Qt
+
 class CalibrationScreen(QWidget):
-    """
-    Tela de Calibração com Wizard.
-    - Dedos: 3 Etapas (Repouso, Meio, Cheio).
-    - Batida: Focada em GIROSCÓPIO (Aceleração Angular).
-    """
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
-
         self.current_calibration_action = None
         self.current_calibration_step = 0
         self.temp_snapshots = {}
         
         self.logical_actions = [
-            "Dedo 1 (Indicador)", "Dedo 2 (Médio)", "Dedo 3 (Anelar)", "Dedo 4 (Mindinho)",
+            "Dedo 1 (Indicador)", "Dedo 2 (Médio)", 
+            "Dedo 3 (Anelar)", "Dedo 4 (Mindinho)",
             "Batida (Mestra)", "Batida (Escrava)"
         ]
 
-        self.is_recording_peak = False
-        self.current_peak_val = 0.0
-        self.current_peak_axis_data = {} # Guarda o snapshot exato do pico
-
-        # --- Layout Principal ---
+        # Layout Principal
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
-
+        
         self.stack = QStackedWidget(self)
         main_layout.addWidget(self.stack)
 
-        # Tela 0: Menu
+        # Telas
         self.main_menu_widget = self._create_main_menu_widget()
-        self.stack.addWidget(self.main_menu_widget)
-
-        # Tela 1: Wizard
         self.wizard_widget = self._create_wizard_widget()
+        self.stack.addWidget(self.main_menu_widget)
         self.stack.addWidget(self.wizard_widget)
 
-        # Área de Dados
-        main_layout.addWidget(QLabel("<b>Dados Brutos (Tempo Real):</b>"))
+        # Debug
         self.sensor_output = QTextEdit()
         self.sensor_output.setReadOnly(True)
-        self.sensor_output.setFixedHeight(150)
+        self.sensor_output.setFixedHeight(80) # Reduzi um pouco para caber os sliders
         main_layout.addWidget(self.sensor_output)
 
         self.setLayout(main_layout)
-
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_sensor_data)
 
     def _create_main_menu_widget(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.addWidget(QLabel("<h2>Mapeamento e Calibração 🎛️</h2>"))
-        layout.addWidget(QLabel("Selecione a Ação para Calibrar:"))
+        
+        # --- Título ---
+        layout.addWidget(QLabel("<h2>Mapeamento & Ajustes Finos</h2>"))
+
+        # --- Área de Calibração (Botões) ---
+        calib_group = QGroupBox("Calibração de Sensores")
+        calib_layout = QVBoxLayout()
+        calib_group.setLayout(calib_layout)
 
         self.action_labels = {}
-        actions_group = QGroupBox("Ações Lógicas")
-        actions_layout = QVBoxLayout()
-        actions_group.setLayout(actions_layout)
-
         for action in self.logical_actions:
             hbox = QHBoxLayout()
-            label = QLabel(f"<b>{action}:</b> <span style='color:#FFA500;'>(Não calibrado)</span>")
+            label = QLabel(f"<b>{action}:</b> --")
             self.action_labels[action] = label
-
             btn = QPushButton(f"Calibrar")
             btn.clicked.connect(lambda _, a=action: self.start_calibration_wizard(a))
-
             hbox.addWidget(label)
-            hbox.addStretch()
             hbox.addWidget(btn)
-            actions_layout.addLayout(hbox)
-
-        layout.addWidget(actions_group)
-        layout.addStretch()
+            calib_layout.addLayout(hbox)
         
-        back_btn = QPushButton("⬅️ Voltar ao Controle")
-        back_btn.clicked.connect(
-            lambda: self.main_app.tabs.setCurrentWidget(self.main_app.main_menu_tab)
-        )
-        layout.addWidget(back_btn)
+        layout.addWidget(calib_group)
+
+        # --- NOVO: Área de Ajustes Globais (Sliders) ---
+        settings_group = QGroupBox("Ajustes de Sensibilidade (Global)")
+        settings_layout = QVBoxLayout()
+        settings_group.setLayout(settings_layout)
+
+        # 1. Trigger Threshold
+        self.lbl_thresh = QLabel("Limiar de Disparo (0.50)")
+        self.slider_thresh = QSlider(Qt.Horizontal)
+        self.slider_thresh.setRange(5, 95) # 0.05 a 0.95
+        self.slider_thresh.setValue(50)    # Default 0.50
+        self.slider_thresh.valueChanged.connect(self.update_guitar_params)
+        settings_layout.addWidget(self.lbl_thresh)
+        settings_layout.addWidget(self.slider_thresh)
+
+        # 2. Filter Alpha
+        self.lbl_alpha = QLabel("Suavização/Velocidade (0.40)")
+        self.slider_alpha = QSlider(Qt.Horizontal)
+        self.slider_alpha.setRange(1, 100) # 0.01 a 1.00
+        self.slider_alpha.setValue(40)     # Default 0.40
+        self.slider_alpha.valueChanged.connect(self.update_guitar_params)
+        settings_layout.addWidget(self.lbl_alpha)
+        settings_layout.addWidget(self.slider_alpha)
+
+        # 3. Crosstalk Gain
+        self.lbl_cross = QLabel("Força da Máscara/Crosstalk (1.00)")
+        self.slider_cross = QSlider(Qt.Horizontal)
+        self.slider_cross.setRange(0, 200) # 0.00 a 2.00
+        self.slider_cross.setValue(100)    # Default 1.00
+        self.slider_cross.valueChanged.connect(self.update_guitar_params)
+        settings_layout.addWidget(self.lbl_cross)
+        settings_layout.addWidget(self.slider_cross)
+
+        layout.addWidget(settings_group)
+
+        layout.addStretch()
+        back = QPushButton("Voltar ao Menu")
+        back.clicked.connect(lambda: self.main_app.tabs.setCurrentWidget(self.main_app.main_menu_tab))
+        layout.addWidget(back)
         return widget
+
+    def update_guitar_params(self):
+        """Chamado sempre que um slider é movido."""
+        # Converte valores dos sliders (int) para float
+        thresh_val = self.slider_thresh.value() / 100.0
+        alpha_val = self.slider_alpha.value() / 100.0
+        cross_val = self.slider_cross.value() / 100.0
+
+        # Atualiza Labels
+        self.lbl_thresh.setText(f"Limiar de Disparo: <b>{thresh_val:.2f}</b> (Baixo=Sensível, Alto=Duro)")
+        self.lbl_alpha.setText(f"Suavização (Alpha): <b>{alpha_val:.2f}</b> (Baixo=Lento/Liso, Alto=Rápido/Tremido)")
+        self.lbl_cross.setText(f"Força Crosstalk: <b>{cross_val:.2f}</b> (1.0=Padrão)")
+
+        # Injeta diretamente na classe Guitar (via Worker)
+        if hasattr(self.main_app, 'worker') and self.main_app.worker and self.main_app.worker.guitar:
+            guitar = self.main_app.worker.guitar
+            guitar.TRIGGER_THRESHOLD = thresh_val
+            guitar.FILTER_ALPHA = alpha_val
+            guitar.CROSSTALK_GAIN = cross_val
+            # print(f"Params atualizados: T={thresh_val}, A={alpha_val}, C={cross_val}")
 
     def _create_wizard_widget(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
         self.wizard_title = QLabel("Calibrando...")
-        self.wizard_title.setStyleSheet("font-size: 18px; color: #00FFFF;")
-        
         self.wizard_instruction = QLabel("Instruções...")
-        self.wizard_instruction.setStyleSheet("font-size: 14px;")
+        
+        # --- SELETOR MANUAL DE SENSOR ---
+        self.sensor_selector_label = QLabel("Selecione o Sensor Físico:")
+        self.sensor_selector = QComboBox()
         
         self.wizard_capture_btn = QPushButton("Capturar")
         self.wizard_capture_btn.clicked.connect(self.process_wizard_step)
-        self.wizard_capture_btn.setStyleSheet("font-size: 14px; padding: 10px;")
-
+        
         self.wizard_cancel_btn = QPushButton("Cancelar")
         self.wizard_cancel_btn.clicked.connect(self.cancel_wizard)
 
         layout.addWidget(self.wizard_title)
+        layout.addWidget(self.sensor_selector_label)
+        layout.addWidget(self.sensor_selector) 
         layout.addWidget(self.wizard_instruction)
         layout.addStretch()
         layout.addWidget(self.wizard_capture_btn)
         layout.addWidget(self.wizard_cancel_btn)
         return widget
 
-    def start_timer(self):
-        self.timer.start(30) # 33Hz
-        self.update_calibration_status_labels()
-
-    def stop_timer(self):
-        self.timer.stop()
-
     def update_sensor_data(self):
         raw_data = self.main_app.communication.get_latest_data()
         if not raw_data: return
+        
+        if self.sensor_selector.count() == 0:
+            sensors = sorted([k for k in raw_data.keys() if "adc" in k or "gy" in k])
+            self.sensor_selector.addItems(sensors)
 
-        # Display Debug
-        texto = ""
-        for key, value in sorted(raw_data.items()):
-            if "adc" in key or "gyro" in key or "slave" in key:
-                val_str = f"{value:.2f}" if isinstance(value, float) else f"{value}"
-                texto += f"<span style='color:#00FFFF;'>{key}:</span> {val_str}\n"
-        self.sensor_output.setHtml(texto)
-
-        # --- LÓGICA DE CAPTURA DE PICO (GIROSCÓPIO) ---
-        if self.is_recording_peak and self.current_calibration_action:
-            prefix = "slave_" if "Escrava" in self.current_calibration_action else "gyro_"
-            
-            # Pega valor absoluto dos 3 eixos de rotação
-            gx = raw_data.get(f"{prefix}gx", 0)
-            gy = raw_data.get(f"{prefix}gy", 0)
-            gz = raw_data.get(f"{prefix}gz", 0)
-            
-            # Magnitude total da rotação (Aceleração Angular Total)
-            magnitude = math.sqrt(gx**2 + gy**2 + gz**2)
-            
-            # Se for o movimento mais forte até agora, salva esse snapshot
-            if magnitude > self.current_peak_val:
-                self.current_peak_val = magnitude
-                self.current_peak_axis_data = {
-                    "gx": gx, "gy": gy, "gz": gz
-                }
-
-    def update_calibration_status_labels(self):
-        for action, label in self.action_labels.items():
-            if action in self.main_app.sensor_mappings:
-                data = self.main_app.sensor_mappings[action]
-                # Tenta mostrar info relevante (Eixo ou Tecla)
-                info = data.get("key", data.get("axis", "OK"))
-                label.setText(f"<b>{action}:</b> <span style='color:#00FF00;'>[OK: {info}]</span>")
-            else:
-                label.setText(f"<b>{action}:</b> <span style='color:#FFA500;'>(Não calibrado)</span>")
-
-    # =========================================================================
-    # LÓGICA DO WIZARD
-    # =========================================================================
+        texto = " | ".join([f"{k}:{v}" for k,v in raw_data.items() if "adc" in k])
+        self.sensor_output.setText(texto)
 
     def start_calibration_wizard(self, action_name):
-        if not self.main_app.communication.connected:
-            QMessageBox.warning(self, "Erro", "Conecte a luva antes de calibrar.")
-            return
-
         self.current_calibration_action = action_name
-        self.current_calibration_step = 1
+        self.current_calibration_step = 0 
         self.temp_snapshots = {}
-        self.is_recording_peak = False
+        
+        current_map = self.main_app.sensor_mappings.get(action_name, {})
+        saved_key = current_map.get("key", "")
         
         self.update_wizard_ui()
+        
+        if saved_key:
+            idx = self.sensor_selector.findText(saved_key)
+            if idx >= 0: self.sensor_selector.setCurrentIndex(idx)
+            
         self.stack.setCurrentWidget(self.wizard_widget)
 
     def update_wizard_ui(self):
@@ -602,146 +609,102 @@ class CalibrationScreen(QWidget):
         step = self.current_calibration_step
         self.wizard_title.setText(f"Calibrando: {action}")
 
-        # --- DEDOS ---
-        if "Dedo" in action:
-            if step == 1:
-                self.wizard_instruction.setText("1/3: Dedo em <b>REPOUSO</b> (Esticado).")
-                self.wizard_capture_btn.setText("Capturar Repouso")
-            elif step == 2:
-                self.wizard_instruction.setText("2/3: Dedo <b>MEIO CURVADO</b>.")
-                self.wizard_capture_btn.setText("Capturar Meio")
-            elif step == 3:
-                self.wizard_instruction.setText("3/3: Dedo <b>TOTALMENTE FECHADO</b>.")
-                self.wizard_capture_btn.setText("Capturar Cheio")
-
-        # --- BATIDA (GIROSCÓPIO) ---
-        elif "Batida" in action:
-            if step == 1:
-                self.wizard_instruction.setText("1/2: <b>REPOUSO</b>\n\nFique com a mão parada.\nIsso zera o ruído do sensor.")
-                self.wizard_capture_btn.setText("Capturar Repouso")
-            elif step == 2:
-                self.wizard_instruction.setText("2/2: <b>BATIDA PARA BAIXO</b>\n\nClique INICIAR, faça uma batida forte PARA BAIXO, e pare.")
-                self.wizard_capture_btn.setText("INICIAR Captura")
-            elif step == 3:
-                self.wizard_instruction.setText("<b>LENDO MOVIMENTO...</b>\n\nFaça o movimento para BAIXO agora!\nO sistema vai detectar o eixo de rotação.")
-                self.wizard_capture_btn.setText("PARAR e Salvar")
+        if step == 0:
+            self.sensor_selector.setVisible(True)
+            self.sensor_selector_label.setVisible(True)
+            self.sensor_selector.setEnabled(True)
+            self.wizard_instruction.setText("Escolha qual sensor físico corresponde a este dedo.")
+            self.wizard_capture_btn.setText("Confirmar Sensor")
+        
+        elif step == 1:
+            self.sensor_selector.setEnabled(False) 
+            self.wizard_instruction.setText("Deixe a mão relaxada (REPOUSO) e capture.")
+            self.wizard_capture_btn.setText("Capturar Repouso")
+            
+        elif step == 2:
+            self.wizard_instruction.setText(
+                "Dobre <b>APENAS ESTE DEDO</b> até o final.\n"
+                "Tente não mexer os outros, mas deixe eles virem naturalmente se a pele puxar."
+            )
+            self.wizard_capture_btn.setText("Capturar Full e Finalizar")
 
     def process_wizard_step(self):
-        action = self.current_calibration_action
         step = self.current_calibration_step
-        snapshot = self.main_app.communication.get_latest_data()
-
-        # --- DEDOS ---
-        if "Dedo" in action:
-            if step == 1: self.temp_snapshots["rest"] = snapshot
-            if step == 2: self.temp_snapshots["half"] = snapshot
-            if step == 3:
-                self.temp_snapshots["full"] = snapshot
-                self.finish_finger_calibration()
-                return
-            self.current_calibration_step += 1
+        
+        if step == 0:
+            self.current_calibration_step = 1
             self.update_wizard_ui()
+            return
 
-        # --- BATIDA ---
-        elif "Batida" in action:
-            if step == 1:
-                # Captura repouso (opcional, mas bom pra offset)
-                self.temp_snapshots["rest"] = snapshot
-                self.current_calibration_step = 2
-                self.update_wizard_ui()
+        snapshot = self.main_app.communication.get_latest_data()
+        
+        if step == 1:
+            self.temp_snapshots["rest"] = snapshot
+            self.current_calibration_step = 2
+            self.update_wizard_ui()
             
-            elif step == 2:
-                # Inicia Gravação de Pico Gyro
-                self.current_peak_val = 0
-                self.current_peak_axis_data = {} 
-                self.is_recording_peak = True
-                self.current_calibration_step = 3
-                self.update_wizard_ui()
-            
-            elif step == 3:
-                # Para Gravação e Analisa
-                self.is_recording_peak = False
-                self.finish_strum_calibration()
+        elif step == 2:
+            self.temp_snapshots["full"] = snapshot
+            if "Dedo" in self.current_calibration_action:
+                self.finish_finger_calibration_manual()
+            else:
+                self.finish_generic_calibration()
 
-    def finish_finger_calibration(self):
+    def finish_finger_calibration_manual(self):
         action = self.current_calibration_action
-        best_key = None
-        max_delta = -1
+        chosen_key = self.sensor_selector.currentText() 
         
-        rest = self.temp_snapshots["rest"]
-        full = self.temp_snapshots["full"]
+        rest_snapshot = self.temp_snapshots["rest"]
+        full_snapshot = self.temp_snapshots["full"]
         
-        for key in rest.keys():
-            if "adc" in key:
-                delta = abs(rest.get(key, 0) - full.get(key, 0))
-                if delta > max_delta:
-                    max_delta = delta
-                    best_key = key
+        val_rest = rest_snapshot.get(chosen_key, 0)
+        val_full = full_snapshot.get(chosen_key, 0)
         
-        if best_key and max_delta > 0.1:
-            mapping = {
-                "key": best_key,
-                "rest": rest[best_key],
-                "half": self.temp_snapshots["half"][best_key],
-                "full": full[best_key]
-            }
-            self.main_app.sensor_mappings[action] = mapping
-            self.main_app.save_mappings_to_file()
-            QMessageBox.information(self, "Sucesso", f"Dedo Calibrado!\nSensor: {best_key}")
-        else:
-            QMessageBox.warning(self, "Falha", "Pouca variação detectada.")
-        self.cancel_wizard()
-
-    def finish_strum_calibration(self):
-        """ 
-        Salva o VETOR COMPLETO (3 eixos) do giroscópio no pico do movimento.
-        """
-        action = self.current_calibration_action
-        prefix = "slave_" if "Escrava" in action else "gyro_"
-        
-        # Dados do pico capturado (dicionário com gx, gy, gz)
-        peak_vector = self.current_peak_axis_data
-        
-        if not peak_vector:
-             QMessageBox.warning(self, "Erro", "Nenhum movimento forte detectado.")
-             self.cancel_wizard()
-             return
-
-        # 1. Calcula a Magnitude total desse vetor de pico
-        gx = peak_vector.get("gx", 0)
-        gy = peak_vector.get("gy", 0)
-        gz = peak_vector.get("gz", 0)
-        peak_magnitude = math.sqrt(gx**2 + gy**2 + gz**2)
-        
-        # 2. Define o Limiar (Threshold)
-        # O gatilho será acionado se a projeção do movimento atual nesse vetor
-        # for maior que X% da força original.
-        threshold = peak_magnitude * 0.4 # 40% de sensibilidade
+        interference_profile = {}
+        for k, v in full_snapshot.items():
+            if "adc" in k and k != chosen_key:
+                interference_profile[k] = v
 
         mapping = {
-            "key_prefix": prefix,
-            "vector": peak_vector, # Salva {gx:..., gy:..., gz:...}
-            "threshold": threshold 
+            "key": chosen_key,
+            "rest": val_rest,
+            "full": val_full,
+            "crosstalk_ref": interference_profile 
         }
         
         self.main_app.sensor_mappings[action] = mapping
         self.main_app.save_mappings_to_file()
         
-        QMessageBox.information(self, "Sucesso", 
-            f"Batida Vetorial Calibrada!\n\n"
-            f"Vetor: [{gx}, {gy}, {gz}]\n"
-            f"Força Ref: {peak_magnitude:.0f}\n"
-            f"Limiar: {threshold:.0f}")
-        
+        QMessageBox.information(self, "Sucesso", f"Calibrado!\nSensor: {chosen_key}\nPerfil de interferência salvo.")
+        self.cancel_wizard()
+
+    def finish_generic_calibration(self):
         self.cancel_wizard()
 
     def cancel_wizard(self):
         self.stack.setCurrentWidget(self.main_menu_widget)
-        self.is_recording_peak = False
-        self.current_calibration_action = None
-        self.temp_snapshots = {}
-        self.update_calibration_status_labels()
 
+    def start_timer(self):
+        self.timer.start(30)
+        self.update_calibration_status_labels()
+        # Sincroniza sliders com valores atuais da Guitarra ao abrir a tela
+        if hasattr(self.main_app, 'worker') and self.main_app.worker and self.main_app.worker.guitar:
+             g = self.main_app.worker.guitar
+             self.slider_thresh.setValue(int(g.TRIGGER_THRESHOLD * 100))
+             self.slider_alpha.setValue(int(g.FILTER_ALPHA * 100))
+             self.slider_cross.setValue(int(g.CROSSTALK_GAIN * 100))
+
+    def stop_timer(self):
+        self.timer.stop()
+
+    def update_calibration_status_labels(self):
+        for action, label in self.action_labels.items():
+            if action in self.main_app.sensor_mappings:
+                data = self.main_app.sensor_mappings[action]
+                info = data.get("key", "OK")
+                label.setText(f"<b>{action}:</b> <span style='color:#00FF00;'>[OK: {info}]</span>")
+            else:
+                label.setText(f"<b>{action}:</b> <span style='color:#FFA500;'>(Não calibrado)</span>")
 class MainMenuScreen(Screen):
     """ Tela Principal (Aba 'Controle'). """
     def __init__(self, parent):
