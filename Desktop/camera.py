@@ -29,6 +29,11 @@ class CameraProcessor:
         ]
         self.prev_inside = [False] * len(self.circulos)
 
+        # --- Novos: sustain de hit (manter botão pressionado por mais frames) ---
+        # Ajuste self.hold_frames para aumentar/diminuir a duração (em frames)
+        self.hold_frames = 6  # por padrão ~200ms @30FPS
+        self.hold_counters = [0] * len(self.circulos)
+
         # Limites de ângulos para coloração visual
         self.limite_angulo_vert = 130.0
         self.limite_angulo_cotovelo = 150.0
@@ -164,7 +169,8 @@ class CameraProcessor:
             if current_inside and not self.prev_inside[i]:
                 # É um NOVO HIT: dispara o evento
                 hits_text.append(f"Drum {i+1}")
-                current_drum_vector[i] = 1 # Vetor de hit é 1 APENAS neste frame (one-shot)
+                # Ao invés de apenas um frame, inicializamos o contador de sustain
+                self.hold_counters[i] = self.hold_frames
                 cor = (0, 255, 0) # Cor de novo hit (Verde)
                 
                 # Atualiza o estado: agora está dentro
@@ -177,6 +183,11 @@ class CameraProcessor:
             elif current_inside and self.prev_inside[i]:
                  # Está dentro, mas não é um novo hit (contínuo)
                  cor = (0, 0, 255) # Cor de contato contínuo (Vermelho)
+            
+            # Se o contador de sustain está ativo, marca o tambor como acionado
+            if self.hold_counters[i] > 0:
+                current_drum_vector[i] = 1
+                self.hold_counters[i] -= 1
             
             # Desenha o tambor
             cv2.circle(image_bgr, (cx, cy), c['raio'], cor, 2)
