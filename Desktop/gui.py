@@ -816,6 +816,18 @@ class MainMenuScreen(Screen):
         )
         general_layout.addWidget(self.instructions_btn)
 
+        # Botão para alternar transparência da janela principal (50% / 100%)
+        self.transparent_btn = QPushButton("Alternar Transparência (50%)")
+        self.transparent_btn.setCheckable(True)
+        self.transparent_btn.clicked.connect(self.toggle_transparency)
+        general_layout.addWidget(self.transparent_btn)
+
+        # Botão para manter a janela sempre acima das outras
+        self.always_on_top_btn = QPushButton("Manter Sempre Acima (OFF)")
+        self.always_on_top_btn.setCheckable(True)
+        self.always_on_top_btn.clicked.connect(self.toggle_always_on_top)
+        general_layout.addWidget(self.always_on_top_btn)
+
         left_column.addWidget(general_group)
         left_column.addStretch() 
 
@@ -938,6 +950,25 @@ class MainMenuScreen(Screen):
         """ Chamado quando o usuário muda o combobox de instrumento. """
         print(f"✅ [UI] Instrumento alterado para: {instrument_name}")
         self.main_app.worker.set_instrument(instrument_name)
+
+    def toggle_transparency(self, checked: bool):
+        """ Alterna opacidade da janela principal entre 1.0 e 0.5. """
+        if checked:
+            self.main_app.setWindowOpacity(0.2)
+            self.transparent_btn.setText("Restaurar Opacidade (100%)")
+        else:
+            self.main_app.setWindowOpacity(1.0)
+            self.transparent_btn.setText("Alternar Transparência (70%)")
+
+    def toggle_always_on_top(self, checked: bool):
+        """ Alterna a flag 'sempre acima' da janela principal. """
+        # Define/limpa a flag e reaplica exibindo a janela para forçar atualização
+        self.main_app.setWindowFlag(Qt.WindowStaysOnTopHint, checked)
+        self.main_app.show()
+        if checked:
+            self.always_on_top_btn.setText("Manter Sempre Acima (ON)")
+        else:
+            self.always_on_top_btn.setText("Manter Sempre Acima (OFF)")
     # =======================================================================
     # --- LÓGICA DA CÂMERA INTEGRADA (PyQt + OpenCV + MediaPipe) ---
     # =======================================================================

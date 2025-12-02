@@ -22,10 +22,10 @@ class CameraProcessor:
         # 'center': Posição normalizada [x, y] (0.0 a 1.0)
         # 'raio': Raio em pixels
         self.circulos = [
-            {'center': [0.1, 0.65], 'raio': 50, 'cor': (255, 0, 0)}, # Drum 1 (Canto superior esquerdo)
+            {'center': [0.1, 0.85], 'raio': 50, 'cor': (255, 0, 0)}, # Drum 1 (Canto superior esquerdo)
             {'center': [0.3, 0.85], 'raio': 50, 'cor': (255, 0, 0)},  # Drum 2 (Centro-esquerda)
-            {'center': [0.7, 0.85], 'raio': 50, 'cor': (255, 0, 0)},  # Drum 3 (Centro-direita)
-            {'center': [0.9, 0.65], 'raio': 50, 'cor': (255, 0, 0)} # Drum 4 (Canto superior direito)
+            {'center': [0.5, 0.85], 'raio': 50, 'cor': (255, 0, 0)},  # Drum 3 (Centro-direita)
+            {'center': [0.7, 0.85], 'raio': 50, 'cor': (255, 0, 0)} # Drum 4 (Canto superior direito)
         ]
         self.prev_inside = [False] * len(self.circulos)
 
