@@ -55,6 +55,33 @@ Inicializamos o desenvolvimento da interface gráfica. Foi feita em python.
 ### Próximos Passos
 Agora vamos realizar a diferenciação da mão nos quadrantes usando a câmera, integrar os sensores com a interface gráfica e continuar trabalhando na mecânica da luva.
 
+---
+## Densenvolvimento até 26/11
+
+### Sensores
+Trocamos a mecânica com potenciômetros por sensores flex. Tivemos alguns problemas, pois a resposta desses sensores não era a esperada.
+
+### Mecânica da Luva
+Fixamos as ESPs com os sensores nas luvas e as fitas nos dedos utilizando velcro.
+
+### Emulação dos controles
+Desenvolvemos a parte responsável por capturar os inputs da luva e gerar os comandos de controle do jogo.
+
+### Câmera
+Fizemos a integração da parte de reconhecimento dos movimentos da câmera com a interface gráfica.
+
+### Interface gráfica 
+Finalizamos o desenvolvimento da interface gráfica, na qual o usuário calibra os sensores, escolhe o instrumento e consegue visualizar o reconhecimento dos movimentos pela câmera.
+
+### Próximos Passos
+Finalizar a integração e elaborar o relatório e o vídeo.
+
+---
+## Densenvolvimento até 08/12
+
+### Integração e finalização
+Finalizamos a integração de todas as partes da luva e elaboramos o relatório, além de gravar o vídeo.
+
 
 
 
